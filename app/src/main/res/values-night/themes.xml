@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.Ritm" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">#C9B8FF</item>
+        <item name="android:colorAccent">#C9B8FF</item>
+        <item name="android:windowBackground">#16131E</item>
+    </style>
+</resources>
