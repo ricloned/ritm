@@ -22,6 +22,9 @@ object UiState {
     var tasksDate by mutableStateOf(LocalDate.now())
     var foodDate by mutableStateOf(LocalDate.now())
     var programDay by mutableIntStateOf(LocalDate.now().dayOfWeek.value)
+    /** Какой день программы выполняется сегодня (по умолчанию — текущий день недели). */
+    var todayProgramDay by mutableIntStateOf(LocalDate.now().dayOfWeek.value)
+    var workoutAgain by mutableStateOf(false)
 
     var plannerItems by mutableStateOf<List<AiClient.PlanItem>>(emptyList())
     var plannerLoading by mutableStateOf(false)
@@ -45,6 +48,8 @@ object UiState {
         if (now != today) {
             if (tasksDate == today) tasksDate = now
             if (foodDate == today) foodDate = now
+            todayProgramDay = now.dayOfWeek.value
+            workoutAgain = false
             today = now
         }
     }

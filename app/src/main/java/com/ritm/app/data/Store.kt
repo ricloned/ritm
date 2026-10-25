@@ -83,6 +83,13 @@ object Store {
             food = o.optJSONArray("food").mapObjects(Codec::foodFromJson)
             goals = o.optJSONArray("goals").mapObjects(Codec::goalFromJson)
             o.optJSONObject("settings")?.let { settings = Codec.settingsFromJson(it) }
+            if (logs.any { it.dayNumber == 0 }) {
+                val ordered = logs.sortedBy { it.finishedAt }
+                var n = 0
+                val numbers = HashMap<Long, Int>()
+                ordered.forEach { l -> n = if (l.dayNumber > 0) l.dayNumber else n + 1; numbers[l.id] = n }
+                logs = logs.map { it.copy(dayNumber = numbers[it.id] ?: it.dayNumber) }
+            }
             plannerDraft = o.optString("plannerDraft", "")
             programDraft = o.optString("programDraft", "")
         } catch (_: Exception) {
@@ -197,43 +204,161 @@ object Store {
         save()
     }
 
-    // ---------------- Текущая тренировка ----------------
+    // ---------------- Текущая тренировка (круговая) ----------------
+
+    fun nextDayNumber(): Int = (logs.maxOfOrNull { it.dayNumber } ?: 0) + 1
 
     fun setsFor(date: LocalDate, ex: Exercise): List<SetEntry> =
         draft?.takeIf { it.date == date }?.sets?.get(ex.id)
             ?: List(ex.sets.coerceAtLeast(1)) { SetEntry() }
 
-    fun updateSet(date: LocalDate, ex: Exercise, index: Int, entry: SetEntry) {
+    /** Подсказка для круга: что было в прошлый раз в этом упражнении, иначе цель из программы. */
+    fun hint(ex: Exercise, round: Int): Pair<String, String> {
+        val prev = logs.asSequence()
+            .sortedByDescending { it.finishedAt }
+            .mapNotNull { l -> l.exercises.firstOrNull { it.name.equals(ex.name, ignoreCase = true) && it.sets.isNotEmpty() } }
+            .firstOrNull()
+        val set = prev?.sets?.getOrNull(round) ?: prev?.sets?.lastOrNull()
+        val w = set?.weight?.takeIf { it.isNotBlank() } ?: if (ex.weight > 0) numText(ex.weight) else ""
+        val r = set?.reps?.takeIf { it.isNotBlank() } ?: ex.reps.toString()
+        return w to r
+    }
+
+    private fun putSets(date: LocalDate, ex: Exercise, list: List<SetEntry>) {
         val cur = draft?.takeIf { it.date == date } ?: WorkoutDraft(date, emptyMap())
-        val list = setsFor(date, ex).toMutableList()
-        if (index >= list.size) list.add(entry) else list[index] = entry
-        draft = cur.copy(sets = cur.sets + (ex.id to list.toList()))
+        draft = cur.copy(sets = cur.sets + (ex.id to list))
         save()
     }
 
-    fun removeLastSet(date: LocalDate, ex: Exercise) {
-        val cur = draft?.takeIf { it.date == date } ?: WorkoutDraft(date, emptyMap())
-        val list = setsFor(date, ex)
-        if (list.size <= 1) return
-        draft = cur.copy(sets = cur.sets + (ex.id to list.dropLast(1)))
-        save()
+    fun updateSet(date: LocalDate, ex: Exercise, index: Int, entry: SetEntry) {
+        val list = setsFor(date, ex).toMutableList()
+        while (list.size <= index) list.add(SetEntry())
+        list[index] = entry
+        putSets(date, ex, list.toList())
+    }
+
+    /** Вес переносится на следующие круги, если там пусто или стоял прежний вес. */
+    fun setWeight(date: LocalDate, ex: Exercise, index: Int, weight: String) {
+        val list = setsFor(date, ex).toMutableList()
+        while (list.size <= index) list.add(SetEntry())
+        val old = list[index].weight
+        list[index] = list[index].copy(weight = weight)
+        for (j in index + 1 until list.size) {
+            if (list[j].weight.isBlank() || list[j].weight == old) list[j] = list[j].copy(weight = weight)
+        }
+        putSets(date, ex, list.toList())
+    }
+
+    fun addRound(date: LocalDate, exercises: List<Exercise>) {
+        val rounds = exercises.maxOfOrNull { setsFor(date, it).size } ?: 0
+        exercises.forEach { ex ->
+            val list = setsFor(date, ex).toMutableList()
+            if (list.size == rounds) {
+                val last = list.lastOrNull()
+                list.add(SetEntry(weight = last?.weight ?: ""))
+                putSets(date, ex, list.toList())
+            }
+        }
+    }
+
+    fun removeRound(date: LocalDate, exercises: List<Exercise>) {
+        val rounds = exercises.maxOfOrNull { setsFor(date, it).size } ?: 0
+        if (rounds <= 1) return
+        exercises.forEach { ex ->
+            val list = setsFor(date, ex)
+            if (list.size == rounds) putSets(date, ex, list.dropLast(1))
+        }
     }
 
     /** Завершает тренировку. Возвращает null, если ничего не заполнено. */
     fun finishWorkout(date: LocalDate, exercises: List<Exercise>): WorkoutLog? {
         val logged = exercises.map { ex ->
-            val sets = setsFor(date, ex)
-                .filter { it.reps.isNotBlank() || it.weight.isNotBlank() || it.done }
-                .map { if (it.reps.isBlank()) it.copy(reps = ex.reps.toString()) else it }
+            val sets = setsFor(date, ex).mapIndexedNotNull { i, s ->
+                if (s.reps.isBlank() && s.weight.isBlank() && !s.done) return@mapIndexedNotNull null
+                val (hw, hr) = hint(ex, i)
+                s.copy(
+                    reps = s.reps.ifBlank { hr },
+                    weight = if (s.weight.isBlank() && s.done) hw else s.weight,
+                    done = true,
+                )
+            }
             ExerciseLog(ex.name, ex.sets, ex.reps, ex.weight, sets)
         }
         if (logged.all { it.sets.isEmpty() }) return null
-        val log = WorkoutLog(id = newId(), date = date, exercises = logged)
+        val log = WorkoutLog(id = newId(), date = date, exercises = logged, dayNumber = nextDayNumber())
         logs = listOf(log) + logs
         draft = null
         save()
         generateReport(log.id)
         return log
+    }
+
+    fun updateLogDate(id: Long, date: LocalDate) {
+        logs = logs.map { if (it.id == id) it.copy(date = date) else it }
+        save()
+    }
+
+    /**
+     * Импорт прошлых тренировок из текста:
+     * «День 8 / Круг 1 / Ноги тренажер 75кг на 15 (коммент)».
+     */
+    fun importLogs(text: String, lastDate: LocalDate): Int {
+        val dayRe = Regex("""^\s*день\s*(\d+)""", RegexOption.IGNORE_CASE)
+        val roundRe = Regex("""^\s*круг\s*(\d+)""", RegexOption.IGNORE_CASE)
+        val lineRe = Regex("""^\s*(.+?)\s+(?:(\d+(?:[.,]\d+)?)\s*кг\s*)?на\s+(\d+)\s*(?:\((.*)\))?\s*$""", RegexOption.IGNORE_CASE)
+
+        data class Day(val number: Int, val order: LinkedHashMap<String, MutableList<SetEntry>> = LinkedHashMap())
+        val days = ArrayList<Day>()
+        var cur: Day? = null
+        var round = 0
+        text.lines().forEach { raw ->
+            val line = raw.trim()
+            if (line.isEmpty()) return@forEach
+            dayRe.find(line)?.let { m ->
+                cur = Day(m.groupValues[1].toInt()).also { days.add(it) }
+                round = 0
+                return@forEach
+            }
+            roundRe.find(line)?.let { m ->
+                round = m.groupValues[1].toInt() - 1
+                return@forEach
+            }
+            val m = lineRe.find(line) ?: return@forEach
+            val day = cur ?: Day(0).also { cur = it; days.add(it) }
+            val name = m.groupValues[1].trim()
+            val list = day.order.getOrPut(name) { mutableListOf() }
+            val entry = SetEntry(
+                reps = m.groupValues[3],
+                weight = m.groupValues[2].replace(',', '.'),
+                done = true,
+                comment = m.groupValues[4].trim(),
+            )
+            if (round < list.size) list.add(entry) else {
+                while (list.size < round) list.add(SetEntry(done = true))
+                list.add(entry)
+            }
+        }
+        val valid = days.filter { it.order.isNotEmpty() }
+        if (valid.isEmpty()) return 0
+        val maxNumber = valid.maxOf { it.number }
+        val base = System.currentTimeMillis() - 365L * 24 * 3600 * 1000
+        val newLogs = valid.map { d ->
+            val n = if (d.number > 0) d.number else maxNumber + 1
+            WorkoutLog(
+                id = newId(),
+                date = lastDate.minusDays((maxNumber - n).toLong().coerceAtLeast(0) * 2),
+                exercises = d.order.map { (name, sets) ->
+                    val w = sets.firstOrNull()?.weight?.toDoubleOrNull() ?: 0.0
+                    val r = sets.firstOrNull()?.reps?.toIntOrNull() ?: 10
+                    ExerciseLog(name, sets.size, r, w, sets)
+                },
+                finishedAt = base + n * 60_000L,
+                dayNumber = n,
+            )
+        }
+        logs = (logs + newLogs).sortedWith(compareByDescending<WorkoutLog> { it.dayNumber }.thenByDescending { it.finishedAt })
+        save()
+        return newLogs.size
     }
 
     fun deleteLog(id: Long) {

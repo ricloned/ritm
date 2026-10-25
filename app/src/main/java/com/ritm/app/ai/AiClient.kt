@@ -4,6 +4,7 @@ import com.ritm.app.data.Exercise
 import com.ritm.app.data.ExerciseLog
 import com.ritm.app.data.Store
 import com.ritm.app.data.WorkoutLog
+import com.ritm.app.data.toText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -214,19 +215,21 @@ $calendar
     suspend fun workoutReport(log: WorkoutLog, previous: WorkoutLog?): String {
         val fmt = DateTimeFormatter.ofPattern("d MMMM yyyy, EEEE", RU)
         val user = buildString {
-            appendLine("Тренировка ${log.date.format(fmt)}:")
-            log.exercises.forEach { appendLine("- " + describeExercise(it)) }
+            appendLine("Сегодняшняя тренировка (${log.date.format(fmt)}), круговая — упражнения идут по кругу:")
+            appendLine(log.toText())
             if (previous != null) {
                 appendLine()
-                appendLine("Предыдущая тренировка ${previous.date.format(fmt)}:")
-                previous.exercises.forEach { appendLine("- " + describeExercise(it)) }
+                appendLine("Прошлая похожая тренировка (${previous.date.format(fmt)}):")
+                appendLine(previous.toText())
             }
         }
         val system = """
-Ты — дружелюбный персональный тренер. Напиши КРАТКИЙ отчёт о тренировке на русском языке: 3–6 коротких предложений.
-Отметь, что получилось, сравни с планом и с прошлой тренировкой (если она есть), назови прогресс в весах или повторениях,
-отметь пропущенные упражнения и дай 1–2 конкретных совета на следующую тренировку.
-Пиши обычным текстом, без markdown и без заголовков. Можно 1–2 эмодзи.
+Ты — дружелюбный персональный тренер. Пользователь тренируется круговым методом: проходит все упражнения подряд,
+потом второй круг и т.д. Формат записи: «Упражнение 75кг на 15 (комментарий)».
+Напиши КРАТКИЙ отчёт на русском: 3–6 коротких предложений. Отметь, что получилось, как падают повторения от круга к кругу,
+сравни с прошлой тренировкой (если есть) — где прогресс в весе или повторениях. Учти комментарии пользователя
+(боль, техника, «надо больше»). Дай 1–2 конкретных совета на следующую тренировку (например, где поднять вес).
+Пиши обычным текстом, без markdown и заголовков. Можно 1–2 эмодзи.
 """.trim()
         return complete(system, user, maxTokens = 800)
     }
@@ -258,6 +261,9 @@ $calendar
         val system = """
 Ты — опытный персональный тренер. Пользователь рассказывает, как он сейчас тренируется (упражнения, веса, повторения),
 какие у него цели, пожелания, ограничения и сколько дней в неделю готов заниматься.
+Пользователь тренируется КРУГОВЫМ методом: все упражнения дня подряд, затем повтор круга. sets = количество кругов.
+Его записи выглядят так: «Круг 1 / Ноги тренажер 75кг на 15 (комментарий)» — сохраняй его короткие названия упражнений,
+если они понятны, и учитывай комментарии («надо больше», «плечо болит»).
 Составь на этой основе программу тренировок на неделю. Учитывай текущие рабочие веса пользователя,
 ставь реалистичные веса (немного прогрессии), распределяй мышечные группы так, чтобы было время на восстановление.
 Дни без тренировок — пустой массив.
@@ -271,7 +277,14 @@ $currentText
 Ключи 1–7 — дни недели: 1 = понедельник, 7 = воскресенье. weight — вес в кг числом (0, если упражнение без веса).
 reps — одно число (для планки — секунды). Названия упражнений на русском.
 """.trim()
-        val raw = complete(system, request, maxTokens = 4000)
+        val recent = Store.logs.sortedByDescending { it.finishedAt }.take(6)
+        val fullRequest = if (recent.isEmpty()) request else buildString {
+            appendLine(request)
+            appendLine()
+            appendLine("Мои последние тренировки (круговые):")
+            recent.forEach { appendLine(); appendLine(it.toText()) }
+        }
+        val raw = complete(system, fullRequest, maxTokens = 4000)
         val start = raw.indexOf('{')
         val end = raw.lastIndexOf('}')
         if (start < 0 || end <= start) throw AiException("ИИ ответил не программой. Попробуй ещё раз.")

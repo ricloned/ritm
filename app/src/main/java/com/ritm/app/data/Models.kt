@@ -28,6 +28,7 @@ data class SetEntry(
     val reps: String = "",
     val weight: String = "",
     val done: Boolean = false,
+    val comment: String = "",
 )
 
 data class ExerciseLog(
@@ -44,6 +45,7 @@ data class WorkoutLog(
     val exercises: List<ExerciseLog>,
     val report: String? = null,
     val finishedAt: Long = System.currentTimeMillis(),
+    val dayNumber: Int = 0,
 )
 
 data class WorkoutDraft(
@@ -139,12 +141,13 @@ internal object Codec {
     )
 
     fun setToJson(s: SetEntry): JSONObject = JSONObject()
-        .put("reps", s.reps).put("weight", s.weight).put("done", s.done)
+        .put("reps", s.reps).put("weight", s.weight).put("done", s.done).put("comment", s.comment)
 
     fun setFromJson(o: JSONObject): SetEntry = SetEntry(
         reps = o.optString("reps"),
         weight = o.optString("weight"),
         done = o.optBoolean("done"),
+        comment = o.optString("comment"),
     )
 
     fun logToJson(l: WorkoutLog): JSONObject = JSONObject()
@@ -152,6 +155,7 @@ internal object Codec {
         .put("date", l.date.toString())
         .put("report", l.report ?: JSONObject.NULL)
         .put("finishedAt", l.finishedAt)
+        .put("dayNumber", l.dayNumber)
         .put("exercises", l.exercises.toJsonArray { e ->
             JSONObject()
                 .put("name", e.name)
@@ -166,6 +170,7 @@ internal object Codec {
         date = LocalDate.parse(o.getString("date")),
         report = o.strOrNull("report"),
         finishedAt = o.optLong("finishedAt"),
+        dayNumber = o.optInt("dayNumber", 0),
         exercises = o.optJSONArray("exercises").mapObjects { e ->
             ExerciseLog(
                 name = e.getString("name"),
@@ -276,3 +281,50 @@ internal object Codec {
         }
     }
 }
+
+// ---------- Текстовый формат тренировки ----------
+
+internal fun numText(d: Double): String = try {
+    java.math.BigDecimal(d.toString()).stripTrailingZeros().toPlainString()
+} catch (_: Exception) {
+    d.toString()
+}
+
+/** «75кг на 15 (коммент)» или «на 12». */
+fun SetEntry.lineText(): String {
+    val w = weight.replace(',', '.').toDoubleOrNull()
+    val base = if (w != null && w > 0) "${numText(w)}кг на $reps" else "на $reps"
+    return if (comment.isNotBlank()) "$base (${comment.trim()})" else base
+}
+
+/** Тренировка в формате «День N / Круг 1 / Упражнение 75кг на 15». */
+fun WorkoutLog.toText(withHeader: Boolean = true): String = buildString {
+    if (withHeader) appendLine(if (dayNumber > 0) "День $dayNumber" else "Тренировка")
+    val rounds = exercises.maxOfOrNull { it.sets.size } ?: 0
+    for (r in 0 until rounds) {
+        if (r > 0) appendLine()
+        appendLine("Круг ${r + 1}")
+        exercises.forEach { e ->
+            e.sets.getOrNull(r)?.let { appendLine("${e.name} ${it.lineText()}") }
+        }
+    }
+    val skipped = exercises.filter { it.sets.isEmpty() }
+    if (skipped.isNotEmpty()) {
+        appendLine()
+        appendLine("Пропущено: " + skipped.joinToString(", ") { it.name })
+    }
+}.trimEnd()
+
+fun roundsWord(n: Int): String {
+    val m10 = n % 10
+    val m100 = n % 100
+    return when {
+        m10 == 1 && m100 != 11 -> "круг"
+        m10 in 2..4 && m100 !in 12..14 -> "круга"
+        else -> "кругов"
+    }
+}
+
+/** «90кг на 12 · 4 круга» */
+fun Exercise.planText(): String =
+    (if (weight > 0) "${numText(weight)}кг на $reps" else "на $reps") + " · $sets ${roundsWord(sets)}"
