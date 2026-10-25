@@ -36,11 +36,6 @@ jobs:
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk "Ritm-${{ steps.ver.outputs.name }}-build${{ github.run_number }}.apk"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Ritm-${{ steps.ver.outputs.name }}-build${{ github.run_number }}
-          path: Ritm-*.apk
-
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
