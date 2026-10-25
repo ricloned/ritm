@@ -332,12 +332,12 @@ object Store {
 
     // ---------------- Черновики ИИ ----------------
 
-    fun setPlannerDraft(text: String) {
+    fun updatePlannerDraft(text: String) {
         plannerDraft = text
         save()
     }
 
-    fun setProgramDraft(text: String) {
+    fun updateProgramDraft(text: String) {
         programDraft = text
         save()
     }

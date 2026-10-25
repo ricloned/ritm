@@ -647,7 +647,7 @@ private fun AiProgramPanel(onClose: () -> Unit) {
     val error = UiState.programError
     var confirm by remember { mutableStateOf(false) }
     val dictate = rememberDictation("Расскажи, как ты занимаешься и чего хочешь…") { r ->
-        Store.setProgramDraft(appendDictated(Store.programDraft, r))
+        Store.updateProgramDraft(appendDictated(Store.programDraft, r))
     }
 
     LazyColumn(
@@ -675,7 +675,7 @@ private fun AiProgramPanel(onClose: () -> Unit) {
         item {
             OutlinedTextField(
                 value = text,
-                onValueChange = { Store.setProgramDraft(it) },
+                onValueChange = { Store.updateProgramDraft(it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 180.dp),

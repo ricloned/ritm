@@ -493,7 +493,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
     val error = UiState.plannerError
     val items = UiState.plannerItems
     val startDictation = rememberDictation("Рассказывай, что нужно сделать…") { r ->
-        Store.setPlannerDraft(appendDictated(Store.plannerDraft, r))
+        Store.updatePlannerDraft(appendDictated(Store.plannerDraft, r))
     }
 
     fun setItems(l: List<AiClient.PlanItem>) {
@@ -523,7 +523,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
         item {
             OutlinedTextField(
                 value = text,
-                onValueChange = { Store.setPlannerDraft(it) },
+                onValueChange = { Store.updatePlannerDraft(it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 180.dp),
@@ -533,7 +533,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
                 shape = RoundedCornerShape(18.dp),
                 trailingIcon = {
                     if (text.isNotEmpty()) {
-                        IconButton(onClick = { Store.setPlannerDraft("") }) { Icon(Icons.Rounded.Close, "Очистить") }
+                        IconButton(onClick = { Store.updatePlannerDraft("") }) { Icon(Icons.Rounded.Close, "Очистить") }
                     }
                 },
             )
@@ -644,7 +644,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
                         Store.addTasks(items.filter { it.selected }.map { Triple(it.title, it.date, it.time) })
                         Toast.makeText(ctx, "Добавлено задач: $count", Toast.LENGTH_SHORT).show()
                         setItems(emptyList())
-                        Store.setPlannerDraft("")
+                        Store.updatePlannerDraft("")
                         onAdded()
                     },
                     enabled = count > 0,

@@ -49,7 +49,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        if (intent?.getStringExtra(Reminders.EXTRA_OPEN) == Reminders.OPEN_FOOD_CAMERA) {
+        if (intent == null) return
+        if (intent.getStringExtra(Reminders.EXTRA_OPEN) == Reminders.OPEN_FOOD_CAMERA) {
             intent.removeExtra(Reminders.EXTRA_OPEN)
             UiState.mainTab = MainTab.Workout
             UiState.workoutSub = 1
