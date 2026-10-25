@@ -1,5 +1,6 @@
 package com.ritm.app.ai
 
+import com.ritm.app.data.Exercise
 import com.ritm.app.data.ExerciseLog
 import com.ritm.app.data.Store
 import com.ritm.app.data.WorkoutLog
@@ -228,5 +229,79 @@ $calendar
 Пиши обычным текстом, без markdown и без заголовков. Можно 1–2 эмодзи.
 """.trim()
         return complete(system, user, maxTokens = 800)
+    }
+
+    // ---------------- Составление программы ----------------
+
+    data class ProgramResult(val days: Map<Int, List<Exercise>>, val comment: String)
+
+    private fun firstInt(v: Any?, def: Int): Int {
+        if (v is Number) return v.toInt()
+        val m = Regex("""\d+""").find(v?.toString() ?: "") ?: return def
+        return m.value.toIntOrNull() ?: def
+    }
+
+    private fun firstDouble(v: Any?): Double {
+        if (v is Number) return v.toDouble().takeIf { !it.isNaN() && it >= 0 } ?: 0.0
+        val m = Regex("""\d+([.,]\d+)?""").find(v?.toString() ?: "") ?: return 0.0
+        return m.value.replace(',', '.').toDoubleOrNull() ?: 0.0
+    }
+
+    suspend fun buildProgram(request: String, current: Map<Int, List<Exercise>>): ProgramResult {
+        val currentText = (1..7).joinToString("\n") { d ->
+            val list = current[d].orEmpty()
+            val name = java.time.DayOfWeek.of(d).getDisplayName(TextStyle.FULL, RU)
+            "$d ($name): " + if (list.isEmpty()) "отдых" else list.joinToString("; ") {
+                "${it.name} ${it.sets}×${it.reps}" + if (it.weight > 0) " ${num(it.weight)} кг" else ""
+            }
+        }
+        val system = """
+Ты — опытный персональный тренер. Пользователь рассказывает, как он сейчас тренируется (упражнения, веса, повторения),
+какие у него цели, пожелания, ограничения и сколько дней в неделю готов заниматься.
+Составь на этой основе программу тренировок на неделю. Учитывай текущие рабочие веса пользователя,
+ставь реалистичные веса (немного прогрессии), распределяй мышечные группы так, чтобы было время на восстановление.
+Дни без тренировок — пустой массив.
+
+Текущая программа пользователя (может быть пустой):
+$currentText
+
+Ответь ТОЛЬКО JSON-объектом без markdown и пояснений вокруг:
+{"days": {"1": [{"name": "Жим лёжа", "sets": 4, "reps": 8, "weight": 60}], "2": [], "3": [], "4": [], "5": [], "6": [], "7": []},
+ "comment": "2–4 предложения: логика программы и советы"}
+Ключи 1–7 — дни недели: 1 = понедельник, 7 = воскресенье. weight — вес в кг числом (0, если упражнение без веса).
+reps — одно число (для планки — секунды). Названия упражнений на русском.
+""".trim()
+        val raw = complete(system, request, maxTokens = 4000)
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) throw AiException("ИИ ответил не программой. Попробуй ещё раз.")
+        val obj = try {
+            JSONObject(raw.substring(start, end + 1))
+        } catch (e: JSONException) {
+            throw AiException("ИИ вернул некорректную программу. Попробуй ещё раз.")
+        }
+        val daysObj = obj.optJSONObject("days") ?: obj
+        val days = HashMap<Int, List<Exercise>>()
+        for (d in 1..7) {
+            val arr = daysObj.optJSONArray(d.toString()) ?: continue
+            val list = ArrayList<Exercise>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val name = o.optString("name").trim()
+                if (name.isEmpty()) continue
+                list.add(
+                    Exercise(
+                        id = Store.newId(),
+                        name = name,
+                        sets = firstInt(o.opt("sets"), 3).coerceIn(1, 10),
+                        reps = firstInt(o.opt("reps"), 10).coerceIn(1, 1000),
+                        weight = firstDouble(o.opt("weight")),
+                    )
+                )
+            }
+            days[d] = list
+        }
+        if (days.values.all { it.isEmpty() }) throw AiException("ИИ не смог составить программу. Опиши подробнее.")
+        return ProgramResult(days, obj.optString("comment").trim())
     }
 }

@@ -1,6 +1,18 @@
 package com.ritm.app.ui.workout
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.foundation.layout.heightIn
+import com.ritm.app.ui.UiState
+import com.ritm.app.ui.appendDictated
+import com.ritm.app.ui.rememberDictation
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -74,11 +86,10 @@ import java.time.LocalDate
 
 @Composable
 fun WorkoutScreen() {
-    var sub by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize()) {
-        SubTabs(listOf("Сегодня", "Питание", "Программа", "История"), sub) { sub = it }
-        when (sub) {
-            0 -> TodayTab(onOpenProgram = { sub = 2 })
+        SubTabs(listOf("Сегодня", "Питание", "Программа", "История"), UiState.workoutSub) { UiState.workoutSub = it }
+        when (UiState.workoutSub) {
+            0 -> TodayTab(onOpenProgram = { UiState.workoutSub = 2 })
             1 -> FoodTab()
             2 -> ProgramTab()
             else -> HistoryTab()
@@ -415,8 +426,14 @@ private fun HistoryTab() {
 @Composable
 private fun ProgramTab() {
     val cs = MaterialTheme.colorScheme
-    var day by rememberSaveable { mutableIntStateOf(LocalDate.now().dayOfWeek.value) }
+    if (UiState.programAiOpen) {
+        BackHandler { UiState.programAiOpen = false }
+        AiProgramPanel(onClose = { UiState.programAiOpen = false })
+        return
+    }
+    val day = UiState.programDay
     var adding by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Exercise?>(null) }
     val list = Store.program[day].orEmpty()
 
@@ -442,7 +459,7 @@ private fun ProgramTab() {
                                         else -> cs.surfaceVariant
                                     }
                                 )
-                                .clickable { day = d }
+                                .clickable { UiState.programDay = d }
                                 .padding(vertical = 10.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
@@ -471,7 +488,7 @@ private fun ProgramTab() {
             }
             if (list.isEmpty()) {
                 item {
-                    EmptyState("🗓️", "Нет упражнений", "Нажми +, чтобы добавить упражнение на этот день")
+                    EmptyState("🗓️", "Нет упражнений", "Нажми +, чтобы добавить упражнение вручную или составить всю программу с ИИ")
                 }
             }
             itemsIndexed(list, key = { _, e -> e.id }) { i, ex ->
@@ -494,16 +511,37 @@ private fun ProgramTab() {
                 }
             }
         }
-        FloatingActionButton(
-            onClick = { adding = true },
-            modifier = Modifier
+        Box(
+            Modifier
                 .align(Alignment.BottomEnd)
-                .padding(20.dp),
-            containerColor = cs.primary,
-            contentColor = cs.onPrimary,
-            shape = RoundedCornerShape(18.dp),
+                .padding(20.dp)
         ) {
-            Icon(Icons.Rounded.Add, "Добавить упражнение")
+            FloatingActionButton(
+                onClick = { menu = true },
+                containerColor = cs.primary,
+                contentColor = cs.onPrimary,
+                shape = RoundedCornerShape(18.dp),
+            ) {
+                Icon(Icons.Rounded.Add, "Добавить")
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Добавить упражнение") },
+                    leadingIcon = { Icon(Icons.Rounded.Edit, null) },
+                    onClick = {
+                        menu = false
+                        adding = true
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Составить программу с ИИ") },
+                    leadingIcon = { Icon(Icons.Rounded.AutoAwesome, null, tint = cs.primary) },
+                    onClick = {
+                        menu = false
+                        UiState.programAiOpen = true
+                    },
+                )
+            }
         }
     }
 
@@ -598,5 +636,176 @@ private fun ExerciseDialog(initial: Exercise?, onDismiss: () -> Unit, onSave: (E
     )
 }
 
-@Suppress("unused")
-private fun describe(log: WorkoutLog) = log.exercises.joinToString("\n") { AiClient.describeExercise(it) }
+// ======================= ИИ-программа =======================
+
+@Composable
+private fun AiProgramPanel(onClose: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val text = Store.programDraft
+    val result = UiState.programResult
+    val loading = UiState.programLoading
+    val error = UiState.programError
+    var confirm by remember { mutableStateOf(false) }
+    val dictate = rememberDictation("Расскажи, как ты занимаешься и чего хочешь…") { r ->
+        Store.setProgramDraft(appendDictated(Store.programDraft, r))
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад") }
+                Text("Программа с ИИ", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        item {
+            SoftCard(color = cs.primaryContainer) {
+                Text(
+                    "Расскажи, как ты сейчас занимаешься: упражнения, веса, повторения, сколько раз в неделю. " +
+                        "Добавь цели и пожелания (масса, сила, рельеф, больная спина, нет штанги, только 3 дня…). " +
+                        "ИИ составит программу на неделю, ты посмотришь и применишь.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cs.onPrimaryContainer
+                )
+            }
+        }
+        item {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { Store.setProgramDraft(it) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 180.dp),
+                placeholder = {
+                    Text("Например: жму 60 кг на 8, приседаю 70 на 10, подтягиваюсь 8 раз. Хожу пн/ср/пт по часу. Хочу набрать массу и подтянуться 15 раз, плечо иногда побаливает.")
+                },
+                shape = RoundedCornerShape(18.dp),
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilledTonalButton(
+                    onClick = dictate,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(52.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(Icons.Rounded.Mic, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Надиктовать")
+                }
+                Button(
+                    onClick = {
+                        val request = text
+                        val current = Store.program
+                        Store.scope.launch {
+                            UiState.programLoading = true
+                            UiState.programError = null
+                            try {
+                                UiState.programResult = AiClient.buildProgram(request, current)
+                            } catch (e: Exception) {
+                                UiState.programError = e.message ?: "Ошибка"
+                            } finally {
+                                UiState.programLoading = false
+                            }
+                        }
+                    },
+                    enabled = text.isNotBlank() && !loading,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(52.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    if (loading) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = cs.onPrimary)
+                    } else {
+                        Icon(Icons.Rounded.AutoAwesome, null)
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (loading) "Составляю…" else "Составить")
+                }
+            }
+        }
+        if (error != null) {
+            item {
+                SoftCard(color = cs.errorContainer) {
+                    Text(error, color = cs.onErrorContainer, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+        if (result != null) {
+            if (result.comment.isNotBlank()) {
+                item {
+                    ReportLike(result.comment)
+                }
+            }
+            items((1..7).toList(), key = { "d$it" }) { d ->
+                val list = result.days[d].orEmpty()
+                SoftCard {
+                    Text(
+                        DayOfWeek.of(d).fullRu() + if (list.isEmpty()) " · отдых" else "",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (list.isEmpty()) cs.onSurfaceVariant else cs.primary
+                    )
+                    list.forEach { ex ->
+                        Row(Modifier.padding(top = 6.dp)) {
+                            Text(ex.name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            Text(targetText(ex), style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+            item {
+                Button(
+                    onClick = { confirm = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) { Text("Применить программу") }
+            }
+        }
+    }
+
+    if (confirm && result != null) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Заменить программу?") },
+            text = { Text("Текущая программа на все дни недели будет заменена новой. История тренировок сохранится.") },
+            confirmButton = {
+                Button(onClick = {
+                    Store.replaceProgram(result.days)
+                    UiState.programResult = null
+                    confirm = false
+                    onClose()
+                }) { Text("Заменить") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Отмена") } },
+        )
+    }
+}
+
+@Composable
+private fun ReportLike(text: String) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(cs.primaryContainer.copy(alpha = 0.7f))
+            .padding(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.AutoAwesome, null, Modifier.size(18.dp), tint = cs.primary)
+            Spacer(Modifier.width(6.dp))
+            Text("Комментарий тренера", style = MaterialTheme.typography.labelLarge, color = cs.primary)
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(text.cleanMd(), style = MaterialTheme.typography.bodyMedium, color = cs.onPrimaryContainer)
+    }
+}

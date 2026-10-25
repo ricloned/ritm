@@ -62,9 +62,10 @@ data class FoodEntry(
 data class Goal(
     val id: Long,
     val title: String,
-    val category: String,
+    val emoji: String,
     val createdAt: Long,
     val doneAt: Long? = null,
+    val pinned: Boolean = false,
 )
 
 data class AppSettings(
@@ -77,6 +78,10 @@ data class AppSettings(
     val workoutReminder: Boolean = false,
     val workoutHour: Int = 18,
     val workoutMinute: Int = 0,
+    val foodReminders: Boolean = true,
+    val foodTimes: List<Int> = listOf(9 * 60, 14 * 60, 19 * 60),
+    val themeMode: String = "fixed",
+    val themeIndex: Int = 0,
 )
 
 // ---------- JSON ----------
@@ -185,21 +190,33 @@ internal object Codec {
     )
 
     fun goalToJson(g: Goal): JSONObject = JSONObject()
-        .put("id", g.id).put("title", g.title).put("category", g.category)
+        .put("id", g.id).put("title", g.title).put("emoji", g.emoji)
         .put("createdAt", g.createdAt).put("doneAt", g.doneAt ?: JSONObject.NULL)
+        .put("pinned", g.pinned)
+
+    private fun legacyEmoji(category: String): String = when (category) {
+        "Спорт" -> "🏃"
+        "Упражнения" -> "💪"
+        "Финансы" -> "💰"
+        else -> "🎯"
+    }
 
     fun goalFromJson(o: JSONObject): Goal = Goal(
         id = o.getLong("id"),
         title = o.getString("title"),
-        category = o.optString("category", "Другое"),
+        emoji = o.strOrNull("emoji")?.takeIf { it.isNotBlank() } ?: legacyEmoji(o.optString("category")),
         createdAt = o.optLong("createdAt"),
         doneAt = if (o.isNull("doneAt")) null else o.optLong("doneAt"),
+        pinned = o.optBoolean("pinned"),
     )
 
     fun settingsToJson(s: AppSettings): JSONObject = JSONObject()
         .put("baseUrl", s.baseUrl).put("apiKey", s.apiKey).put("model", s.model)
         .put("digestEnabled", s.digestEnabled).put("digestHour", s.digestHour).put("digestMinute", s.digestMinute)
         .put("workoutReminder", s.workoutReminder).put("workoutHour", s.workoutHour).put("workoutMinute", s.workoutMinute)
+        .put("foodReminders", s.foodReminders)
+        .put("foodTimes", JSONArray().also { a -> s.foodTimes.forEach { a.put(it) } })
+        .put("themeMode", s.themeMode).put("themeIndex", s.themeIndex)
 
     fun settingsFromJson(o: JSONObject): AppSettings {
         val d = AppSettings()
@@ -213,6 +230,12 @@ internal object Codec {
             workoutReminder = o.optBoolean("workoutReminder", d.workoutReminder),
             workoutHour = o.optInt("workoutHour", d.workoutHour),
             workoutMinute = o.optInt("workoutMinute", d.workoutMinute),
+            foodReminders = o.optBoolean("foodReminders", d.foodReminders),
+            foodTimes = o.optJSONArray("foodTimes")?.let { a ->
+                (0 until a.length()).map { a.optInt(it) }.filter { it in 0 until 24 * 60 }.sorted()
+            } ?: d.foodTimes,
+            themeMode = o.optString("themeMode", d.themeMode),
+            themeIndex = o.optInt("themeIndex", d.themeIndex),
         )
     }
 

@@ -46,7 +46,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
+import com.ritm.app.ui.UiState
+import com.ritm.app.ui.swipeHorizontal
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -74,7 +77,8 @@ fun FoodTab() {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    var date by rememberSaveable { mutableStateOf(LocalDate.now()) }
+    val date = UiState.foodDate
+    val today = UiState.today
     var pendingPath by rememberSaveable { mutableStateOf<String?>(null) }
     var opened by remember { mutableStateOf<FoodEntry?>(null) }
     val entries = Store.food.filter { it.date == date }.sortedBy { it.time }
@@ -87,7 +91,7 @@ fun FoodTab() {
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val p = pendingPath
         if (p != null) {
-            if (ok && File(p).length() > 0) Store.addFood(date, p) else File(p).delete()
+            if (ok && File(p).length() > 0) Store.addFood(UiState.foodDate, p) else File(p).delete()
         }
         pendingPath = null
     }
@@ -95,7 +99,7 @@ fun FoodTab() {
     val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             val target = newFile()
-            val forDate = date
+            val forDate = UiState.foodDate
             scope.launch {
                 val ok = withContext(Dispatchers.IO) {
                     try {
@@ -125,9 +129,22 @@ fun FoodTab() {
         }
     }
 
+    // открыли из уведомления «сфоткай еду» — сразу камера
+    LaunchedEffect(UiState.openFoodCamera) {
+        if (UiState.openFoodCamera) {
+            UiState.openFoodCamera = false
+            takePhoto()
+        }
+    }
+
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .swipeHorizontal(
+                onPrev = { UiState.foodDate = UiState.foodDate.minusDays(1) },
+                onNext = { if (UiState.foodDate.isBefore(UiState.today)) UiState.foodDate = UiState.foodDate.plusDays(1) },
+            ),
         contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 24.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -141,12 +158,12 @@ fun FoodTab() {
                     .padding(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { date = date.minusDays(1) }) { Icon(Icons.Rounded.ChevronLeft, "Назад") }
+                IconButton(onClick = { UiState.foodDate = date.minusDays(1) }) { Icon(Icons.Rounded.ChevronLeft, "Назад") }
                 Column(
                     Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { pickDate(ctx, date) { date = it } }
+                        .clickable { pickDate(ctx, date) { if (!it.isAfter(today)) UiState.foodDate = it } }
                         .padding(vertical = 6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -157,7 +174,7 @@ fun FoodTab() {
                         color = cs.onSurfaceVariant
                     )
                 }
-                IconButton(onClick = { date = date.plusDays(1) }, enabled = date.isBefore(LocalDate.now())) {
+                IconButton(onClick = { UiState.foodDate = date.plusDays(1) }, enabled = date.isBefore(today)) {
                     Icon(Icons.Rounded.ChevronRight, "Вперёд")
                 }
             }
@@ -192,7 +209,11 @@ fun FoodTab() {
         }
         if (entries.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                EmptyState("🍽️", "Пока пусто", "Сфоткай каждый приём пищи — так будет видно, что ты ел за день")
+                EmptyState(
+                    "🍽️",
+                    if (date == today) "Сегодня ещё ничего" else "За этот день нет фото",
+                    "Фоткай каждый приём пищи. Напоминания можно настроить в настройках. Листай дни свайпом влево-вправо."
+                )
             }
         }
         items(entries, key = { it.id }) { e ->

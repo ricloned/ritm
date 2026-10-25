@@ -45,6 +45,12 @@ object Store {
     var settings by mutableStateOf(AppSettings())
         private set
 
+    /** Черновики текста для ИИ — не теряются при переключении вкладок и перезапуске. */
+    var plannerDraft by mutableStateOf("")
+        private set
+    var programDraft by mutableStateOf("")
+        private set
+
     var reportLoading by mutableStateOf(setOf<Long>())
         private set
     var reportErrors by mutableStateOf(mapOf<Long, String>())
@@ -77,6 +83,8 @@ object Store {
             food = o.optJSONArray("food").mapObjects(Codec::foodFromJson)
             goals = o.optJSONArray("goals").mapObjects(Codec::goalFromJson)
             o.optJSONObject("settings")?.let { settings = Codec.settingsFromJson(it) }
+            plannerDraft = o.optString("plannerDraft", "")
+            programDraft = o.optString("programDraft", "")
         } catch (_: Exception) {
             // повреждённый файл — сохраним копию, чтобы не потерять данные
             try {
@@ -98,6 +106,8 @@ object Store {
                 .put("food", food.toJsonArray(Codec::foodToJson))
                 .put("goals", goals.toJsonArray(Codec::goalToJson))
                 .put("settings", Codec.settingsToJson(settings))
+                .put("plannerDraft", plannerDraft)
+                .put("programDraft", programDraft)
                 .toString()
         } catch (_: Exception) {
             return
@@ -280,9 +290,9 @@ object Store {
 
     // ---------------- Цели ----------------
 
-    fun addGoal(title: String, category: String) {
+    fun addGoal(title: String, emoji: String) {
         if (title.isBlank()) return
-        goals = goals + Goal(newId(), title.trim(), category, System.currentTimeMillis())
+        goals = listOf(Goal(newId(), title.trim(), emoji, System.currentTimeMillis())) + goals
         save()
     }
 
@@ -298,8 +308,42 @@ object Store {
         save()
     }
 
+    fun togglePin(id: Long) {
+        goals = goals.map { if (it.id == id) it.copy(pinned = !it.pinned) else it }
+        save()
+    }
+
+    /** Ставит цель [fromId] на место цели [toId]. */
+    fun moveGoal(fromId: Long, toId: Long) {
+        val list = goals.toMutableList()
+        val fi = list.indexOfFirst { it.id == fromId }
+        val ti = list.indexOfFirst { it.id == toId }
+        if (fi < 0 || ti < 0 || fi == ti) return
+        val item = list.removeAt(fi)
+        list.add(ti, item)
+        goals = list.toList()
+        save()
+    }
+
     fun deleteGoal(id: Long) {
         goals = goals.filterNot { it.id == id }
+        save()
+    }
+
+    // ---------------- Черновики ИИ ----------------
+
+    fun setPlannerDraft(text: String) {
+        plannerDraft = text
+        save()
+    }
+
+    fun setProgramDraft(text: String) {
+        programDraft = text
+        save()
+    }
+
+    fun replaceProgram(p: Map<Int, List<Exercise>>) {
+        program = p
         save()
     }
 
@@ -309,7 +353,23 @@ object Store {
         val old = settings
         settings = n
         save()
-        val strip = { s: AppSettings -> s.copy(baseUrl = "", apiKey = "", model = "") }
+        val strip = { s: AppSettings -> s.copy(baseUrl = "", apiKey = "", model = "", themeMode = "", themeIndex = 0) }
         if (strip(old) != strip(n)) Reminders.scheduleDaily(appContext)
+    }
+
+    // ---------------- Темы ----------------
+
+    const val THEME_COUNT = 7
+
+    /** Индекс темы с учётом режима: фиксированная, каждый день новая, каждый заход новая. */
+    fun themeIndexFor(date: LocalDate): Int = when (settings.themeMode) {
+        "daily" -> Math.floorMod(date.toEpochDay(), THEME_COUNT.toLong()).toInt()
+        else -> settings.themeIndex.coerceIn(0, THEME_COUNT - 1)
+    }
+
+    /** Вызывается при каждом заходе в приложение. */
+    fun rotateLaunchTheme() {
+        if (!loaded || settings.themeMode != "launch") return
+        updateSettings(settings.copy(themeIndex = (settings.themeIndex + 1) % THEME_COUNT))
     }
 }

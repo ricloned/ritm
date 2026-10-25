@@ -1,6 +1,19 @@
 package com.ritm.app.ui
 
+import android.app.Activity
 import android.app.DatePickerDialog
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.composed
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import android.app.TimePickerDialog
 import android.content.Context
 import androidx.compose.foundation.background
@@ -200,3 +213,55 @@ fun EmptyState(
         }
     }
 }
+
+/** Свайп влево/вправо по области: вправо — назад, влево — вперёд. */
+fun Modifier.swipeHorizontal(onPrev: () -> Unit, onNext: () -> Unit): Modifier = composed {
+    val threshold = with(LocalDensity.current) { 70.dp.toPx() }
+    val prev = rememberUpdatedState(onPrev)
+    val next = rememberUpdatedState(onNext)
+    pointerInput(Unit) {
+        var total = 0f
+        detectHorizontalDragGestures(
+            onDragStart = { total = 0f },
+            onDragEnd = {
+                if (total > threshold) prev.value() else if (total < -threshold) next.value()
+                total = 0f
+            },
+            onDragCancel = { total = 0f },
+            onHorizontalDrag = { change, dx ->
+                total += dx
+                change.consume()
+            },
+        )
+    }
+}
+
+/** Голосовой ввод через системное распознавание речи. Возвращает функцию запуска. */
+@Composable
+fun rememberDictation(prompt: String, onText: (String) -> Unit): () -> Unit {
+    val ctx = LocalContext.current
+    val callback = rememberUpdatedState(onText)
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        if (res.resultCode == Activity.RESULT_OK) {
+            val r = res.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!r.isNullOrBlank()) callback.value(r)
+        }
+    }
+    return {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
+        }
+        try {
+            launcher.launch(intent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(ctx, "Распознавание речи недоступно — нажми микрофон на клавиатуре", Toast.LENGTH_LONG).show()
+        }
+    }
+}
+
+/** Добавляет надиктованный текст к уже написанному. */
+fun appendDictated(old: String, add: String): String = if (old.isBlank()) add else old.trimEnd() + ". " + add

@@ -7,7 +7,17 @@ import android.speech.RecognizerIntent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
+import com.ritm.app.ui.UiState
+import com.ritm.app.ui.appendDictated
+import com.ritm.app.ui.rememberDictation
+import com.ritm.app.ui.swipeHorizontal
+import java.time.temporal.ChronoUnit
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -91,12 +101,11 @@ import java.time.format.DateTimeFormatter
 
 @Composable
 fun PlansScreen() {
-    var sub by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize()) {
-        SubTabs(listOf("Задачи", "ИИ-планер"), sub) { sub = it }
-        when (sub) {
+        SubTabs(listOf("Задачи", "ИИ-планер"), UiState.plansSub) { UiState.plansSub = it }
+        when (UiState.plansSub) {
             0 -> TasksTab()
-            else -> AiPlannerTab(onAdded = { sub = 0 })
+            else -> AiPlannerTab(onAdded = { UiState.plansSub = 0 })
         }
     }
 }
@@ -106,9 +115,8 @@ fun PlansScreen() {
 @Composable
 private fun TasksTab() {
     val ctx = LocalContext.current
-    val today = LocalDate.now()
-    var selected by rememberSaveable { mutableStateOf(LocalDate.now()) }
-    var weekStart by rememberSaveable { mutableStateOf(LocalDate.now().with(DayOfWeek.MONDAY)) }
+    val today = UiState.today
+    val selected = UiState.tasksDate
     var adding by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Task?>(null) }
 
@@ -117,23 +125,22 @@ private fun TasksTab() {
     val doneCount = dayTasks.count { it.done }
 
     fun select(d: LocalDate) {
-        selected = d
-        weekStart = d.with(DayOfWeek.MONDAY)
+        UiState.tasksDate = d
     }
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
-            Modifier.fillMaxSize(),
+            Modifier
+                .fillMaxSize()
+                .swipeHorizontal(onPrev = { select(selected.minusDays(1)) }, onNext = { select(selected.plusDays(1)) }),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             item {
                 WeekStrip(
-                    weekStart = weekStart,
                     selected = selected,
                     today = today,
-                    onWeek = { weekStart = it },
-                    onSelect = { selected = it },
+                    onSelect = { select(it) },
                     onPick = { pickDate(ctx, selected) { select(it) } },
                     onToday = { select(today) },
                 )
@@ -223,20 +230,42 @@ private fun TasksTab() {
     }
 }
 
+private fun weekPage(d: LocalDate): Int =
+    UiState.WEEK_CENTER + ChronoUnit.WEEKS.between(UiState.baseMonday, d.with(DayOfWeek.MONDAY)).toInt()
+
+private fun pageMonday(page: Int): LocalDate = UiState.baseMonday.plusWeeks((page - UiState.WEEK_CENTER).toLong())
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WeekStrip(
-    weekStart: LocalDate,
     selected: LocalDate,
     today: LocalDate,
-    onWeek: (LocalDate) -> Unit,
     onSelect: (LocalDate) -> Unit,
     onPick: () -> Unit,
     onToday: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val pager = rememberPagerState(initialPage = weekPage(selected)) { UiState.WEEK_PAGES }
+    val currentSelected = rememberUpdatedState(selected)
+
+    // выбранный день сменился (свайп по задачам, календарь, «сегодня») — листаем неделю
+    LaunchedEffect(selected) {
+        val target = weekPage(selected)
+        if (pager.currentPage != target) pager.animateScrollToPage(target)
+    }
+    // неделю пролистали свайпом — выбираем тот же день недели
+    LaunchedEffect(pager.settledPage) {
+        val monday = pageMonday(pager.settledPage)
+        val sel = currentSelected.value
+        if (sel.isBefore(monday) || sel.isAfter(monday.plusDays(6))) {
+            onSelect(monday.plusDays((sel.dayOfWeek.value - 1).toLong()))
+        }
+    }
+
     SoftCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { onWeek(weekStart.minusWeeks(1)) }) {
+            IconButton(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage - 1) } }) {
                 Icon(Icons.Rounded.ChevronLeft, contentDescription = "Прошлая неделя")
             }
             Row(
@@ -251,7 +280,7 @@ private fun WeekStrip(
                 Icon(Icons.Rounded.CalendarMonth, null, Modifier.size(18.dp), tint = cs.primary)
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    weekStart.plusDays(3).format(DateTimeFormatter.ofPattern("LLLL yyyy", RU)).cap(),
+                    pageMonday(pager.currentPage).plusDays(3).format(DateTimeFormatter.ofPattern("LLLL yyyy", RU)).cap(),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -259,57 +288,60 @@ private fun WeekStrip(
             if (selected != today) {
                 TextButton(onClick = onToday) { Text("Сегодня") }
             }
-            IconButton(onClick = { onWeek(weekStart.plusWeeks(1)) }) {
+            IconButton(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }) {
                 Icon(Icons.Rounded.ChevronRight, contentDescription = "Следующая неделя")
             }
         }
         Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth()) {
-            for (i in 0..6) {
-                val d = weekStart.plusDays(i.toLong())
-                val sel = d == selected
-                val isToday = d == today
-                val hasOpen = Store.tasks.any { it.date == d && !it.done }
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .padding(horizontal = 2.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(
-                            when {
-                                sel -> cs.primary
-                                isToday -> cs.primaryContainer
-                                else -> Color.Transparent
-                            }
-                        )
-                        .clickable { onSelect(d) }
-                        .padding(vertical = 8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        d.dayOfWeek.shortRu(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (sel) cs.onPrimary else cs.onSurfaceVariant
-                    )
-                    Text(
-                        d.dayOfMonth.toString(),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (sel) cs.onPrimary else cs.onSurface
-                    )
-                    Box(
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth()) { page ->
+            val monday = pageMonday(page)
+            Row(Modifier.fillMaxWidth()) {
+                for (i in 0..6) {
+                    val d = monday.plusDays(i.toLong())
+                    val sel = d == selected
+                    val isToday = d == today
+                    val hasOpen = Store.tasks.any { it.date == d && !it.done }
+                    Column(
                         Modifier
-                            .padding(top = 2.dp)
-                            .size(5.dp)
-                            .clip(CircleShape)
+                            .weight(1f)
+                            .padding(horizontal = 2.dp)
+                            .clip(RoundedCornerShape(14.dp))
                             .background(
                                 when {
-                                    !hasOpen -> Color.Transparent
-                                    sel -> cs.onPrimary
-                                    else -> cs.primary
+                                    sel -> cs.primary
+                                    isToday -> cs.primaryContainer
+                                    else -> Color.Transparent
                                 }
                             )
-                    )
+                            .clickable { onSelect(d) }
+                            .padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            d.dayOfWeek.shortRu(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (sel) cs.onPrimary else cs.onSurfaceVariant
+                        )
+                        Text(
+                            d.dayOfMonth.toString(),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (sel) cs.onPrimary else cs.onSurface
+                        )
+                        Box(
+                            Modifier
+                                .padding(top = 2.dp)
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when {
+                                        !hasOpen -> Color.Transparent
+                                        sel -> cs.onPrimary
+                                        else -> cs.primary
+                                    }
+                                )
+                        )
+                    }
                 }
             }
         }
@@ -455,33 +487,17 @@ private fun TaskDialog(
 @Composable
 private fun AiPlannerTab(onAdded: () -> Unit) {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
     val cs = MaterialTheme.colorScheme
-    var text by rememberSaveable { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var items by remember { mutableStateOf<List<AiClient.PlanItem>>(emptyList()) }
-
-    val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        if (res.resultCode == Activity.RESULT_OK) {
-            val r = res.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-            if (!r.isNullOrBlank()) text = if (text.isBlank()) r else text.trimEnd() + ". " + r
-        }
+    val text = Store.plannerDraft
+    val loading = UiState.plannerLoading
+    val error = UiState.plannerError
+    val items = UiState.plannerItems
+    val startDictation = rememberDictation("Рассказывай, что нужно сделать…") { r ->
+        Store.setPlannerDraft(appendDictated(Store.plannerDraft, r))
     }
 
-    fun startDictation() {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "Рассказывай, что нужно сделать…")
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
-        }
-        try {
-            speech.launch(intent)
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(ctx, "Распознавание речи недоступно — нажми микрофон на клавиатуре", Toast.LENGTH_LONG).show()
-        }
+    fun setItems(l: List<AiClient.PlanItem>) {
+        UiState.plannerItems = l
     }
 
     LazyColumn(
@@ -507,7 +523,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
         item {
             OutlinedTextField(
                 value = text,
-                onValueChange = { text = it },
+                onValueChange = { Store.setPlannerDraft(it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 180.dp),
@@ -517,7 +533,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
                 shape = RoundedCornerShape(18.dp),
                 trailingIcon = {
                     if (text.isNotEmpty()) {
-                        IconButton(onClick = { text = "" }) { Icon(Icons.Rounded.Close, "Очистить") }
+                        IconButton(onClick = { Store.setPlannerDraft("") }) { Icon(Icons.Rounded.Close, "Очистить") }
                     }
                 },
             )
@@ -537,17 +553,18 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
                 }
                 Button(
                     onClick = {
-                        scope.launch {
-                            loading = true
-                            error = null
+                        val request = text
+                        Store.scope.launch {
+                            UiState.plannerLoading = true
+                            UiState.plannerError = null
                             try {
-                                val res = AiClient.parsePlan(text)
-                                items = res
-                                if (res.isEmpty()) error = "Не нашёл задач в тексте"
+                                val res = AiClient.parsePlan(request)
+                                UiState.plannerItems = res
+                                if (res.isEmpty()) UiState.plannerError = "Не нашёл задач в тексте"
                             } catch (e: Exception) {
-                                error = e.message ?: "Ошибка"
+                                UiState.plannerError = e.message ?: "Ошибка"
                             } finally {
-                                loading = false
+                                UiState.plannerLoading = false
                             }
                         }
                     },
@@ -590,7 +607,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
                         .clip(RoundedCornerShape(16.dp))
                         .background(cs.surface)
                         .clickable {
-                            items = items.toMutableList().also { l -> l[i] = it.copy(selected = !it.selected) }
+                            setItems(items.toMutableList().also { l -> l[i] = it.copy(selected = !it.selected) })
                         }
                         .padding(end = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -598,7 +615,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
                     Checkbox(
                         checked = it.selected,
                         onCheckedChange = { _ ->
-                            items = items.toMutableList().also { l -> l[i] = it.copy(selected = !it.selected) }
+                            setItems(items.toMutableList().also { l -> l[i] = it.copy(selected = !it.selected) })
                         },
                         colors = CheckboxDefaults.colors(checkedColor = cs.primary, uncheckedColor = cs.outline)
                     )
@@ -626,8 +643,8 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
                     onClick = {
                         Store.addTasks(items.filter { it.selected }.map { Triple(it.title, it.date, it.time) })
                         Toast.makeText(ctx, "Добавлено задач: $count", Toast.LENGTH_SHORT).show()
-                        items = emptyList()
-                        text = ""
+                        setItems(emptyList())
+                        Store.setPlannerDraft("")
                         onAdded()
                     },
                     enabled = count > 0,

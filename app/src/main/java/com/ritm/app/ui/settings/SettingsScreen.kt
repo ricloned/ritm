@@ -4,7 +4,21 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import com.ritm.app.ui.UiState
+import com.ritm.app.ui.theme.THEMES
+import com.ritm.app.ui.theme.previewColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -212,6 +226,68 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
 
+            // ---------- Тема ----------
+            SectionTitle("Тема оформления")
+            SoftCard {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("fixed" to "Одна тема", "daily" to "Новая каждый день", "launch" to "Новая при заходе").forEach { (mode, label) ->
+                        Pill(label, s.themeMode == mode) { commit(s.copy(themeMode = mode)) }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                val activeIndex = Store.themeIndexFor(UiState.today)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    THEMES.forEachIndexed { i, t ->
+                        Column(
+                            Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { commit(s.copy(themeMode = "fixed", themeIndex = i)) }
+                                .padding(4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(previewColor(t))
+                                    .border(
+                                        width = if (i == activeIndex) 3.dp else 0.dp,
+                                        color = if (i == activeIndex) cs.onSurface else Color.Transparent,
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) { Text(t.emoji) }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                t.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (i == activeIndex) cs.primary else cs.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    when (s.themeMode) {
+                        "daily" -> "Каждый день — следующая тема из семи. Нажми на цвет, чтобы закрепить одну."
+                        "launch" -> "При каждом заходе в приложение тема меняется. Нажми на цвет, чтобы закрепить одну."
+                        else -> "Нажми на цвет, чтобы выбрать тему."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cs.onSurfaceVariant
+                )
+            }
+
             // ---------- Уведомления ----------
             SectionTitle("Уведомления")
             SoftCard {
@@ -247,6 +323,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         }
                     },
                 )
+                TestButton { Reminders.showDigest(ctx) }
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = cs.outlineVariant)
                 ToggleTimeRow(
                     title = "Напоминание о тренировке",
@@ -260,12 +337,72 @@ fun SettingsScreen(onBack: () -> Unit) {
                         }
                     },
                 )
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = { Reminders.showDigest(ctx) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp)
-                ) { Text("Показать тестовое уведомление") }
+                TestButton { Reminders.showWorkout(ctx, force = true) }
+                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = cs.outlineVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Сфоткать еду 🍽️", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                        Text(
+                            "Нажатие на уведомление сразу открывает камеру. Не приходит, если ты фоткал еду последние 1,5 часа.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = cs.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = s.foodReminders,
+                        onCheckedChange = { commit(s.copy(foodReminders = it)) },
+                        colors = SwitchDefaults.colors(checkedTrackColor = cs.primary)
+                    )
+                }
+                if (s.foodReminders) {
+                    Spacer(Modifier.height(10.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        s.foodTimes.forEachIndexed { i, m ->
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(cs.primaryContainer),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    LocalTime.of(m / 60, m % 60).hm(),
+                                    modifier = Modifier
+                                        .clickable {
+                                            pickTime(ctx, LocalTime.of(m / 60, m % 60)) { t ->
+                                                val list = s.foodTimes.toMutableList()
+                                                list[i] = t.hour * 60 + t.minute
+                                                commit(s.copy(foodTimes = list.distinct().sorted()))
+                                            }
+                                        }
+                                        .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = cs.onPrimaryContainer
+                                )
+                                Icon(
+                                    Icons.Rounded.Close,
+                                    contentDescription = "Убрать",
+                                    tint = cs.onPrimaryContainer,
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .clickable { commit(s.copy(foodTimes = s.foodTimes.filterIndexed { j, _ -> j != i })) }
+                                        .padding(start = 2.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
+                                        .size(16.dp)
+                                )
+                            }
+                        }
+                        if (s.foodTimes.size < Reminders.MAX_FOOD_TIMES) {
+                            Pill("+ время", selected = false) {
+                                pickTime(ctx, LocalTime.of(12, 0)) { t ->
+                                    commit(s.copy(foodTimes = (s.foodTimes + (t.hour * 60 + t.minute)).distinct().sorted()))
+                                }
+                            }
+                        }
+                    }
+                }
+                TestButton { Reminders.showFood(ctx, force = true) }
             }
 
             // ---------- О приложении ----------
@@ -285,6 +422,13 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+@Composable
+private fun TestButton(onClick: () -> Unit) {
+    TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)) {
+        Text("Проверить это уведомление", style = MaterialTheme.typography.labelMedium)
     }
 }
 

@@ -45,7 +45,7 @@ enum class MainTab(val title: String, val icon: ImageVector) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen() {
-    var tab by rememberSaveable { mutableStateOf(MainTab.Plans) }
+    val tab = UiState.mainTab
     var showSettings by rememberSaveable { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
 
@@ -76,7 +76,7 @@ fun MainScreen() {
                 MainTab.entries.forEach { t ->
                     NavigationBarItem(
                         selected = tab == t,
-                        onClick = { tab = t },
+                        onClick = { UiState.mainTab = t },
                         icon = { Icon(t.icon, contentDescription = t.title) },
                         label = { Text(t.title) },
                         colors = NavigationBarItemDefaults.colors(

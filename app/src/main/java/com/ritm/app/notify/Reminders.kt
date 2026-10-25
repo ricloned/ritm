@@ -26,6 +26,12 @@ import java.time.format.DateTimeFormatter
 object Reminders {
     const val CH_TASKS = "tasks"
     const val CH_DAILY = "daily"
+    const val CH_FOOD = "food"
+    const val EXTRA_OPEN = "open"
+    const val OPEN_FOOD_CAMERA = "food_camera"
+    private const val RC_FOOD_BASE = 10
+    const val MAX_FOOD_TIMES = 6
+    private const val NOTIF_FOOD = 100003
     private const val RC_DIGEST = 1
     private const val RC_WORKOUT = 2
     private const val NOTIF_DIGEST = 100001
@@ -44,6 +50,11 @@ object Reminders {
         nm.createNotificationChannel(
             NotificationChannel(CH_DAILY, "План на день и тренировки", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "Утренний план и напоминание о тренировке"
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_FOOD, "Напоминания о еде", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Напоминание сфоткать приём пищи"
             }
         )
     }
@@ -115,6 +126,15 @@ object Reminders {
             Intent(ctx, AlarmReceiver::class.java).setAction("com.ritm.app.WORKOUT").putExtra(EXTRA_TYPE, "workout")
         )
         if (s.workoutReminder) setAlarm(ctx, nextAt(s.workoutHour, s.workoutMinute), workout) else am.cancel(workout)
+
+        for (i in 0 until MAX_FOOD_TIMES) {
+            val pi = pending(
+                ctx, RC_FOOD_BASE + i,
+                Intent(ctx, AlarmReceiver::class.java).setAction("com.ritm.app.FOOD_$i").putExtra(EXTRA_TYPE, "food")
+            )
+            val minutes = s.foodTimes.getOrNull(i)
+            if (s.foodReminders && minutes != null) setAlarm(ctx, nextAt(minutes / 60, minutes % 60), pi) else am.cancel(pi)
+        }
     }
 
     fun rescheduleAll(ctx: Context) {
@@ -126,11 +146,13 @@ object Reminders {
         Build.VERSION.SDK_INT < 33 ||
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-    fun show(ctx: Context, id: Int, channel: String, title: String, text: String) {
+    fun show(ctx: Context, id: Int, channel: String, title: String, text: String, openExtra: String? = null) {
         if (!canNotify(ctx)) return
+        val intent = Intent(ctx, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (openExtra != null) intent.putExtra(EXTRA_OPEN, openExtra)
         val open = PendingIntent.getActivity(
-            ctx, 0,
-            Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            ctx, if (openExtra != null) 7 else 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val n = NotificationCompat.Builder(ctx, channel)
@@ -164,13 +186,25 @@ object Reminders {
         show(ctx, NOTIF_DIGEST, CH_DAILY, "План на сегодня · ${list.size}", text)
     }
 
-    fun showWorkout(ctx: Context) {
+    fun showWorkout(ctx: Context, force: Boolean = false) {
         val today = LocalDate.now()
         val exercises = Store.program[today.dayOfWeek.value].orEmpty()
-        if (exercises.isEmpty()) return
-        if (Store.logs.any { it.date == today }) return
-        val text = exercises.joinToString(", ") { it.name }
-        show(ctx, NOTIF_WORKOUT, CH_DAILY, "Время тренировки 💪", "Сегодня ${exercises.size} упр.: $text")
+        if (!force && (exercises.isEmpty() || Store.logs.any { it.date == today })) return
+        val text = if (exercises.isEmpty()) {
+            "Сегодня по программе отдых. Так будет выглядеть напоминание в день тренировки."
+        } else {
+            "Сегодня ${exercises.size} упр.: " + exercises.joinToString(", ") { it.name }
+        }
+        show(ctx, NOTIF_WORKOUT, CH_DAILY, "Время тренировки 💪", text)
+    }
+
+    fun showFood(ctx: Context, force: Boolean = false) {
+        // если недавно уже фоткал — не дёргаем
+        val recent = Store.food.any { System.currentTimeMillis() - it.time < 90 * 60 * 1000L }
+        if (!force && recent) return
+        val count = Store.food.count { it.date == LocalDate.now() }
+        val text = "Нажми, чтобы сразу открыть камеру. Сегодня записано приёмов пищи: $count"
+        show(ctx, NOTIF_FOOD, CH_FOOD, "Сфоткай, что ешь 🍽️", text, OPEN_FOOD_CAMERA)
     }
 }
 
@@ -191,6 +225,10 @@ class AlarmReceiver : BroadcastReceiver() {
             }
             "workout" -> {
                 Reminders.showWorkout(context)
+                Reminders.scheduleDaily(context)
+            }
+            "food" -> {
+                Reminders.showFood(context)
                 Reminders.scheduleDaily(context)
             }
         }
