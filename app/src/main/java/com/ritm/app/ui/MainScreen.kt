@@ -11,6 +11,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.MonitorWeight
+import com.ritm.app.ui.progress.ProgressScreen
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -39,6 +41,7 @@ import com.ritm.app.ui.workout.WorkoutScreen
 enum class MainTab(val title: String, val icon: ImageVector) {
     Plans("Планы", Icons.Rounded.CalendarMonth),
     Workout("Тренировки", Icons.Rounded.FitnessCenter),
+    Progress("Прогресс", Icons.Rounded.MonitorWeight),
     Goals("Цели", Icons.Rounded.Flag),
 }
 
@@ -101,6 +104,7 @@ fun MainScreen() {
             when (tab) {
                 MainTab.Plans -> PlansScreen()
                 MainTab.Workout -> WorkoutScreen()
+                MainTab.Progress -> ProgressScreen()
                 MainTab.Goals -> GoalsScreen()
             }
         }

@@ -70,6 +70,16 @@ data class Goal(
     val pinned: Boolean = false,
 )
 
+/** Еженедельный замер: вес, талия, фото. */
+data class BodyCheck(
+    val id: Long,
+    val date: LocalDate,
+    val weight: Double?,
+    val waist: Double?,
+    val photos: List<String>,
+    val note: String = "",
+)
+
 data class AppSettings(
     val baseUrl: String = "https://openrouter.ai/api/v1",
     val apiKey: String = "",
@@ -82,6 +92,10 @@ data class AppSettings(
     val workoutMinute: Int = 0,
     val foodReminders: Boolean = true,
     val foodTimes: List<Int> = listOf(9 * 60, 14 * 60, 19 * 60),
+    val weeklyReminder: Boolean = true,
+    val weeklyDay: Int = 7,
+    val weeklyHour: Int = 10,
+    val weeklyMinute: Int = 0,
     val themeMode: String = "fixed",
     val themeIndex: Int = 0,
 )
@@ -222,6 +236,8 @@ internal object Codec {
         .put("foodReminders", s.foodReminders)
         .put("foodTimes", JSONArray().also { a -> s.foodTimes.forEach { a.put(it) } })
         .put("themeMode", s.themeMode).put("themeIndex", s.themeIndex)
+        .put("weeklyReminder", s.weeklyReminder).put("weeklyDay", s.weeklyDay)
+        .put("weeklyHour", s.weeklyHour).put("weeklyMinute", s.weeklyMinute)
 
     fun settingsFromJson(o: JSONObject): AppSettings {
         val d = AppSettings()
@@ -239,10 +255,32 @@ internal object Codec {
             foodTimes = o.optJSONArray("foodTimes")?.let { a ->
                 (0 until a.length()).map { a.optInt(it) }.filter { it in 0 until 24 * 60 }.sorted()
             } ?: d.foodTimes,
+            weeklyReminder = o.optBoolean("weeklyReminder", d.weeklyReminder),
+            weeklyDay = o.optInt("weeklyDay", d.weeklyDay).coerceIn(1, 7),
+            weeklyHour = o.optInt("weeklyHour", d.weeklyHour),
+            weeklyMinute = o.optInt("weeklyMinute", d.weeklyMinute),
             themeMode = o.optString("themeMode", d.themeMode),
             themeIndex = o.optInt("themeIndex", d.themeIndex),
         )
     }
+
+    fun checkToJson(c: BodyCheck): JSONObject = JSONObject()
+        .put("id", c.id)
+        .put("date", c.date.toString())
+        .put("weight", c.weight ?: JSONObject.NULL)
+        .put("waist", c.waist ?: JSONObject.NULL)
+        .put("photos", JSONArray().also { a -> c.photos.forEach { a.put(it) } })
+        .put("note", c.note)
+
+    fun checkFromJson(o: JSONObject): BodyCheck = BodyCheck(
+        id = o.getLong("id"),
+        date = LocalDate.parse(o.getString("date")),
+        weight = if (o.isNull("weight")) null else o.optDouble("weight").takeIf { !it.isNaN() },
+        waist = if (o.isNull("waist")) null else o.optDouble("waist").takeIf { !it.isNaN() },
+        photos = o.optJSONArray("photos")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } }
+            ?: emptyList(),
+        note = o.optString("note"),
+    )
 
     fun programToJson(p: Map<Int, List<Exercise>>): JSONObject {
         val o = JSONObject()

@@ -29,6 +29,9 @@ object Reminders {
     const val CH_FOOD = "food"
     const val EXTRA_OPEN = "open"
     const val OPEN_FOOD_CAMERA = "food_camera"
+    const val OPEN_PROGRESS_NEW = "progress_new"
+    private const val RC_WEEKLY = 30
+    private const val NOTIF_WEEKLY = 100004
     private const val RC_FOOD_BASE = 10
     const val MAX_FOOD_TIMES = 6
     private const val NOTIF_FOOD = 100003
@@ -111,6 +114,15 @@ object Reminders {
         return dt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
     }
 
+    private fun nextWeekly(day: Int, hour: Int, minute: Int): Long {
+        val now = LocalDateTime.now()
+        val today = LocalDate.now()
+        val diff = Math.floorMod(day.coerceIn(1, 7) - today.dayOfWeek.value, 7)
+        var dt = today.plusDays(diff.toLong()).atTime(hour.coerceIn(0, 23), minute.coerceIn(0, 59))
+        if (!dt.isAfter(now.plusSeconds(5))) dt = dt.plusWeeks(1)
+        return dt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    }
+
     fun scheduleDaily(ctx: Context) {
         val s = Store.settings
         val am = ctx.getSystemService(AlarmManager::class.java) ?: return
@@ -126,6 +138,12 @@ object Reminders {
             Intent(ctx, AlarmReceiver::class.java).setAction("com.ritm.app.WORKOUT").putExtra(EXTRA_TYPE, "workout")
         )
         if (s.workoutReminder) setAlarm(ctx, nextAt(s.workoutHour, s.workoutMinute), workout) else am.cancel(workout)
+
+        val weekly = pending(
+            ctx, RC_WEEKLY,
+            Intent(ctx, AlarmReceiver::class.java).setAction("com.ritm.app.WEEKLY").putExtra(EXTRA_TYPE, "weekly")
+        )
+        if (s.weeklyReminder) setAlarm(ctx, nextWeekly(s.weeklyDay, s.weeklyHour, s.weeklyMinute), weekly) else am.cancel(weekly)
 
         for (i in 0 until MAX_FOOD_TIMES) {
             val pi = pending(
@@ -198,6 +216,15 @@ object Reminders {
         show(ctx, NOTIF_WORKOUT, CH_DAILY, "Время тренировки 💪", text)
     }
 
+    fun showWeekly(ctx: Context, force: Boolean = false) {
+        val recent = Store.checks.any { !it.date.isBefore(LocalDate.now().minusDays(4)) }
+        if (!force && recent) return
+        val last = Store.checks.maxByOrNull { it.date }?.weight
+        val text = "Встань на весы утром натощак и сделай фото в том же месте и свете." +
+            (last?.let { " Прошлый вес: ${com.ritm.app.data.numText(it)} кг." } ?: "")
+        show(ctx, NOTIF_WEEKLY, CH_DAILY, "Отчёт недели 📸", text, OPEN_PROGRESS_NEW)
+    }
+
     fun showFood(ctx: Context, force: Boolean = false) {
         // если недавно уже фоткал — не дёргаем
         val recent = Store.food.any { System.currentTimeMillis() - it.time < 90 * 60 * 1000L }
@@ -225,6 +252,10 @@ class AlarmReceiver : BroadcastReceiver() {
             }
             "workout" -> {
                 Reminders.showWorkout(context)
+                Reminders.scheduleDaily(context)
+            }
+            "weekly" -> {
+                Reminders.showWeekly(context)
                 Reminders.scheduleDaily(context)
             }
             "food" -> {

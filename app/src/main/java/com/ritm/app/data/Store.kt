@@ -42,6 +42,8 @@ object Store {
         private set
     var goals by mutableStateOf(listOf<Goal>())
         private set
+    var checks by mutableStateOf(listOf<BodyCheck>())
+        private set
     var settings by mutableStateOf(AppSettings())
         private set
 
@@ -82,6 +84,7 @@ object Store {
             draft = Codec.draftFromJson(o.optJSONObject("draft"))
             food = o.optJSONArray("food").mapObjects(Codec::foodFromJson)
             goals = o.optJSONArray("goals").mapObjects(Codec::goalFromJson)
+            checks = o.optJSONArray("checks").mapObjects(Codec::checkFromJson)
             o.optJSONObject("settings")?.let { settings = Codec.settingsFromJson(it) }
             if (logs.any { it.dayNumber == 0 }) {
                 val ordered = logs.sortedBy { it.finishedAt }
@@ -112,6 +115,7 @@ object Store {
                 .put("draft", draft?.let(Codec::draftToJson) ?: JSONObject.NULL)
                 .put("food", food.toJsonArray(Codec::foodToJson))
                 .put("goals", goals.toJsonArray(Codec::goalToJson))
+                .put("checks", checks.toJsonArray(Codec::checkToJson))
                 .put("settings", Codec.settingsToJson(settings))
                 .put("plannerDraft", plannerDraft)
                 .put("programDraft", programDraft)
@@ -453,6 +457,29 @@ object Store {
     fun deleteGoal(id: Long) {
         goals = goals.filterNot { it.id == id }
         save()
+    }
+
+    // ---------------- Прогресс (еженедельные замеры) ----------------
+
+    fun saveCheck(c: BodyCheck) {
+        val old = checks.find { it.id == c.id }
+        old?.photos?.filter { it !in c.photos }?.forEach { deleteFile(it) }
+        checks = (if (old != null) checks.map { if (it.id == c.id) c else it } else checks + c)
+            .sortedBy { it.date }
+        save()
+    }
+
+    fun deleteCheck(id: Long) {
+        checks.find { it.id == id }?.photos?.forEach { deleteFile(it) }
+        checks = checks.filterNot { it.id == id }
+        save()
+    }
+
+    fun deleteFile(path: String) {
+        try {
+            File(path).delete()
+        } catch (_: Exception) {
+        }
     }
 
     // ---------------- Черновики ИИ ----------------

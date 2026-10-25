@@ -50,6 +50,11 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
+        if (intent.getStringExtra(Reminders.EXTRA_OPEN) == Reminders.OPEN_PROGRESS_NEW) {
+            intent.removeExtra(Reminders.EXTRA_OPEN)
+            UiState.mainTab = MainTab.Progress
+            UiState.progressNew = true
+        }
         if (intent.getStringExtra(Reminders.EXTRA_OPEN) == Reminders.OPEN_FOOD_CAMERA) {
             intent.removeExtra(Reminders.EXTRA_OPEN)
             UiState.mainTab = MainTab.Workout

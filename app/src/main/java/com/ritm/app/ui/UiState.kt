@@ -12,6 +12,16 @@ import java.time.LocalDate
  * Состояние интерфейса, которое живёт, пока открыто приложение:
  * выбранные вкладки, даты, результаты ИИ. Не сбрасывается при переходе между вкладками.
  */
+data class CheckDraft(
+    val id: Long?,
+    val date: LocalDate,
+    val weight: String,
+    val waist: String,
+    val note: String,
+    val photos: List<String>,
+    val originalPhotos: List<String>,
+)
+
 object UiState {
     var today by mutableStateOf(LocalDate.now())
 
@@ -34,6 +44,13 @@ object UiState {
     var programResult by mutableStateOf<AiClient.ProgramResult?>(null)
     var programLoading by mutableStateOf(false)
     var programError by mutableStateOf<String?>(null)
+
+    /** Прогресс: редактор замера, сравнение, просмотр. */
+    var progressNew by mutableStateOf(false)
+    var progressEditor by mutableStateOf<CheckDraft?>(null)
+    var progressCompare by mutableStateOf(false)
+    var compareA by mutableStateOf<Long?>(null)
+    var compareB by mutableStateOf<Long?>(null)
 
     /** Открыть камеру для еды (из уведомления). */
     var openFoodCamera by mutableStateOf(false)

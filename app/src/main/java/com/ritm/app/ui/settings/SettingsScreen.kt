@@ -17,6 +17,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import com.ritm.app.ui.UiState
+import com.ritm.app.ui.shortRu
 import com.ritm.app.ui.theme.THEMES
 import com.ritm.app.ui.theme.previewColor
 import androidx.compose.foundation.layout.Arrangement
@@ -338,6 +339,32 @@ fun SettingsScreen(onBack: () -> Unit) {
                     },
                 )
                 TestButton { Reminders.showWorkout(ctx, force = true) }
+                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = cs.outlineVariant)
+                ToggleTimeRow(
+                    title = "Отчёт недели 📸",
+                    subtitle = "Вес и фото во вкладке «Прогресс»",
+                    enabled = s.weeklyReminder,
+                    time = LocalTime.of(s.weeklyHour, s.weeklyMinute),
+                    onToggle = { commit(s.copy(weeklyReminder = it)) },
+                    onPickTime = {
+                        pickTime(ctx, LocalTime.of(s.weeklyHour, s.weeklyMinute)) { t ->
+                            commit(s.copy(weeklyHour = t.hour, weeklyMinute = t.minute))
+                        }
+                    },
+                )
+                if (s.weeklyReminder) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        for (d in 1..7) {
+                            Pill(
+                                java.time.DayOfWeek.of(d).shortRu(),
+                                s.weeklyDay == d,
+                                modifier = Modifier.weight(1f)
+                            ) { commit(s.copy(weeklyDay = d)) }
+                        }
+                    }
+                }
+                TestButton { Reminders.showWeekly(ctx, force = true) }
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = cs.outlineVariant)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
