@@ -74,6 +74,13 @@ import com.ritm.app.data.SetEntry
 import com.ritm.app.data.Store
 import com.ritm.app.data.WorkoutLog
 import com.ritm.app.data.planText
+import com.ritm.app.data.programToText
+import com.ritm.app.data.toText
+import com.ritm.app.ui.Pill
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import com.ritm.app.ui.EmptyState
 import com.ritm.app.ui.SoftCard
 import com.ritm.app.ui.SubTabs
@@ -111,6 +118,8 @@ private fun ProgramTab() {
         return
     }
     val day = UiState.programDay
+    val ctx = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     var adding by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Exercise?>(null) }
@@ -122,6 +131,31 @@ private fun ProgramTab() {
             contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 96.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Pill("📋 Скопировать программу", selected = false) {
+                        clipboard.setText(AnnotatedString(programToText(Store.program)))
+                        Toast.makeText(ctx, "Программа скопирована", Toast.LENGTH_SHORT).show()
+                    }
+                    Pill("📋 + последние тренировки", selected = false) {
+                        val recent = Store.logs.sortedByDescending { it.dayNumber }.take(3)
+                        val text = buildString {
+                            append(programToText(Store.program))
+                            if (recent.isNotEmpty()) {
+                                append("\n\nПоследние тренировки:")
+                                recent.forEach { append("\n\n").append(it.toText()) }
+                            }
+                        }
+                        clipboard.setText(AnnotatedString(text))
+                        Toast.makeText(ctx, "Скопировано: программа и ${recent.size} трен.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (d in 1..7) {

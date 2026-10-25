@@ -328,3 +328,26 @@ fun roundsWord(n: Int): String {
 /** «90кг на 12 · 4 круга» */
 fun Exercise.planText(): String =
     (if (weight > 0) "${numText(weight)}кг на $reps" else "на $reps") + " · $sets ${roundsWord(sets)}"
+
+/** Вся программа недели текстом — чтобы скопировать и отправить. */
+fun programToText(program: Map<Int, List<Exercise>>): String = buildString {
+    appendLine("Моя программа (круговая тренировка)")
+    for (d in 1..7) {
+        val list = program[d].orEmpty()
+        val dayName = java.time.DayOfWeek.of(d)
+            .getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.forLanguageTag("ru-RU"))
+            .replaceFirstChar { it.titlecase() }
+        appendLine()
+        if (list.isEmpty()) {
+            appendLine("$dayName — отдых")
+        } else {
+            val rounds = list.maxOf { it.sets }
+            appendLine("$dayName · $rounds ${roundsWord(rounds)}")
+            list.forEach { e ->
+                val base = if (e.weight > 0) "${numText(e.weight)}кг на ${e.reps}" else "на ${e.reps}"
+                val extra = if (e.sets != rounds) " (${e.sets} ${roundsWord(e.sets)})" else ""
+                appendLine("${e.name} $base$extra")
+            }
+        }
+    }
+}.trimEnd()
