@@ -65,6 +65,17 @@ data class FoodItem(
     val protein: Double = 0.0,
     val fat: Double = 0.0,
     val carbs: Double = 0.0,
+    /** Пользователь поправил цифры вручную — запомним продукт в справочник. */
+    val edited: Boolean = false,
+)
+
+/** Продукт из личного справочника: КБЖУ на 100 г. */
+data class MyFood(
+    val name: String,
+    val kcal: Double,
+    val protein: Double,
+    val fat: Double,
+    val carbs: Double,
 )
 
 data class FoodEntry(
@@ -117,6 +128,8 @@ data class AppSettings(
     val workoutReminder: Boolean = false,
     val workoutHour: Int = 18,
     val workoutMinute: Int = 0,
+    /** Искать КБЖу брендовых продуктов в интернете (OpenRouter / Claude). */
+    val foodWebSearch: Boolean = true,
     val foodReminders: Boolean = true,
     val foodTimes: List<Int> = listOf(9 * 60, 14 * 60, 19 * 60),
     val kcalGoal: Int = 2500,
@@ -234,9 +247,20 @@ internal object Codec {
         },
     )
 
+    fun myFoodToJson(f: MyFood): JSONObject = JSONObject()
+        .put("name", f.name).put("kcal", f.kcal).put("protein", f.protein).put("fat", f.fat).put("carbs", f.carbs)
+
+    fun myFoodFromJson(o: JSONObject): MyFood = MyFood(
+        name = o.getString("name"),
+        kcal = o.numOrNull("kcal") ?: 0.0,
+        protein = o.numOrNull("protein") ?: 0.0,
+        fat = o.numOrNull("fat") ?: 0.0,
+        carbs = o.numOrNull("carbs") ?: 0.0,
+    )
+
     fun foodItemToJson(i: FoodItem): JSONObject = JSONObject()
         .put("id", i.id).put("name", i.name).put("grams", i.grams).put("kcal", i.kcal)
-        .put("protein", i.protein).put("fat", i.fat).put("carbs", i.carbs)
+        .put("protein", i.protein).put("fat", i.fat).put("carbs", i.carbs).put("edited", i.edited)
 
     fun foodItemFromJson(o: JSONObject): FoodItem = FoodItem(
         id = o.optLong("id", System.nanoTime()),
@@ -246,6 +270,7 @@ internal object Codec {
         protein = o.numOrNull("protein") ?: 0.0,
         fat = o.numOrNull("fat") ?: 0.0,
         carbs = o.numOrNull("carbs") ?: 0.0,
+        edited = o.optBoolean("edited"),
     )
 
     fun foodToJson(f: FoodEntry): JSONObject = JSONObject()
@@ -310,6 +335,7 @@ internal object Codec {
         .put("foodReminders", s.foodReminders)
         .put("foodTimes", JSONArray().also { a -> s.foodTimes.forEach { a.put(it) } })
         .put("themeMode", s.themeMode).put("themeIndex", s.themeIndex)
+        .put("foodWebSearch", s.foodWebSearch)
         .put("updateRepo", s.updateRepo).put("githubToken", s.githubToken)
         .put("kcalGoal", s.kcalGoal).put("proteinGoal", s.proteinGoal)
         .put("fatGoal", s.fatGoal).put("carbsGoal", s.carbsGoal)
@@ -340,6 +366,7 @@ internal object Codec {
             weeklyDay = o.optInt("weeklyDay", d.weeklyDay).coerceIn(1, 7),
             weeklyHour = o.optInt("weeklyHour", d.weeklyHour),
             weeklyMinute = o.optInt("weeklyMinute", d.weeklyMinute),
+            foodWebSearch = o.optBoolean("foodWebSearch", d.foodWebSearch),
             updateRepo = o.optString("updateRepo", d.updateRepo).ifBlank { d.updateRepo },
             githubToken = o.optString("githubToken", d.githubToken),
             themeMode = o.optString("themeMode", d.themeMode),

@@ -307,6 +307,30 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
 
+            // ---------- Мои продукты ----------
+            SectionTitle("КБЖУ: поиск и мои продукты")
+            SoftCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Искать продукты в интернете", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                        Text(
+                            if (com.ritm.app.ai.AiClient.webSearchAvailable())
+                                "Для брендов (Теос, Савушкин…) ИИ найдёт точный состав. Запрос чуть дольше и немного дороже."
+                            else "Работает с OpenRouter и Claude. С текущим сервисом ИИ считает по своим знаниям.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = cs.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = s.foodWebSearch,
+                        onCheckedChange = { commit(s.copy(foodWebSearch = it)) },
+                        colors = SwitchDefaults.colors(checkedTrackColor = cs.primary)
+                    )
+                }
+                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = cs.outlineVariant)
+                MyFoodsList()
+            }
+
             // ---------- Уведомления ----------
             SectionTitle("Уведомления")
             SoftCard {
@@ -497,6 +521,111 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+@Composable
+private fun MyFoodsList() {
+    val cs = MaterialTheme.colorScheme
+    var editing by remember { mutableStateOf<com.ritm.app.data.MyFood?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
+    val list = Store.myFoods
+    Text("Мои продукты · ${list.size}", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+    Text(
+        "КБЖУ на 100 г. ИИ берёт цифры отсюда в первую очередь. Продукт попадает сюда сам, когда ты поправляешь его цифры в приёме пищи.",
+        style = MaterialTheme.typography.bodySmall,
+        color = cs.onSurfaceVariant
+    )
+    Spacer(Modifier.height(6.dp))
+    (if (expanded) list else list.take(5)).forEach { f ->
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { editing = f }
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(f.name, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${Math.round(f.kcal)} ккал · Б ${Math.round(f.protein * 10) / 10.0} · Ж ${Math.round(f.fat * 10) / 10.0} · У ${Math.round(f.carbs * 10) / 10.0}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = { Store.deleteMyFood(f.name) }) {
+                Icon(Icons.Rounded.Close, "Удалить", tint = cs.onSurfaceVariant)
+            }
+        }
+    }
+    Row {
+        if (list.size > 5) {
+            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Свернуть" else "Показать все") }
+        }
+        TextButton(onClick = { adding = true }) { Text("+ Добавить продукт") }
+    }
+    if (adding) MyFoodDialog(null) { adding = false }
+    editing?.let { f -> MyFoodDialog(f) { editing = null } }
+}
+
+@Composable
+private fun MyFoodDialog(initial: com.ritm.app.data.MyFood?, onClose: () -> Unit) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    fun t(d: Double?) = d?.let { (Math.round(it * 10) / 10.0).toString().removeSuffix(".0") } ?: ""
+    var kcal by remember { mutableStateOf(t(initial?.kcal)) }
+    var p by remember { mutableStateOf(t(initial?.protein)) }
+    var f by remember { mutableStateOf(t(initial?.fat)) }
+    var c by remember { mutableStateOf(t(initial?.carbs)) }
+    fun num(v: String) = v.replace(',', '.').filter { it.isDigit() || it == '.' }.take(6)
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(if (initial == null) "Новый продукт" else "Продукт") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("Название") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+                )
+                Text("На 100 г:", style = MaterialTheme.typography.labelMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(
+                        Triple("Ккал", kcal) { v: String -> kcal = num(v) },
+                        Triple("Б", p) { v: String -> p = num(v) },
+                        Triple("Ж", f) { v: String -> f = num(v) },
+                        Triple("У", c) { v: String -> c = num(v) },
+                    ).forEach { (label, value, set) ->
+                        OutlinedTextField(
+                            value = value, onValueChange = set,
+                            label = { Text(label) }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    Store.saveMyFood(
+                        com.ritm.app.data.MyFood(
+                            name.trim(),
+                            kcal.toDoubleOrNull() ?: 0.0,
+                            p.toDoubleOrNull() ?: 0.0,
+                            f.toDoubleOrNull() ?: 0.0,
+                            c.toDoubleOrNull() ?: 0.0,
+                        ),
+                        oldName = initial?.name,
+                    )
+                    onClose()
+                },
+                enabled = name.isNotBlank() && kcal.toDoubleOrNull() != null
+            ) { Text("Сохранить") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
+    )
 }
 
 @Composable

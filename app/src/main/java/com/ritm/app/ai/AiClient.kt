@@ -45,6 +45,7 @@ object AiClient {
         messages: List<Pair<String, String>>,
         maxTokens: Int = 2000,
         extraUserContent: JSONArray? = null,
+        webSearch: Boolean = false,
     ): String = withContext(Dispatchers.IO) {
         val s = Store.settings
         if (s.apiKey.isBlank()) throw AiException("Добавь API-ключ в настройках (шестерёнка сверху)")
@@ -71,11 +72,24 @@ object AiClient {
                 .put("max_tokens", maxTokens)
                 .put("system", system)
                 .put("messages", msgArray)
+                .also {
+                    if (webSearch) it.put(
+                        "tools", JSONArray().put(
+                            JSONObject().put("type", "web_search_20250305").put("name", "web_search").put("max_uses", 3)
+                        )
+                    )
+                }
         } else {
             JSONObject()
                 .put("model", s.model.trim())
                 .put("temperature", 0.4)
                 .put("messages", msgArray)
+                .also {
+                    // OpenRouter: встроенный веб-поиск
+                    if (webSearch && base.contains("openrouter.ai")) it.put(
+                        "plugins", JSONArray().put(JSONObject().put("id", "web").put("max_results", 4))
+                    )
+                }
         }
 
         val conn = try {
@@ -86,7 +100,7 @@ object AiClient {
         try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 30_000
-            conn.readTimeout = 180_000
+            conn.readTimeout = 240_000
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("Accept", "application/json")
@@ -108,12 +122,16 @@ object AiClient {
             val json = JSONObject(text)
             val out = if (anthropic) {
                 val arr = json.optJSONArray("content") ?: JSONArray()
-                buildString {
-                    for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
-                        if (o.optString("type") == "text") append(o.optString("text"))
+                // при веб-поиске итоговый текст идёт после результатов поиска
+                val sb = StringBuilder()
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    when (o.optString("type")) {
+                        "text" -> sb.append(o.optString("text"))
+                        "server_tool_use", "web_search_tool_result" -> sb.setLength(0)
                     }
                 }
+                sb.toString()
             } else {
                 val msg = json.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
                 if (msg.isNull("content")) "" else msg.getString("content")
@@ -175,7 +193,18 @@ object AiClient {
         return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
     }
 
-    suspend fun analyzeFood(photoPath: String, comment: String): FoodResult {
+    /** Можно ли искать в интернете с текущим провайдером. */
+    fun webSearchAvailable(): Boolean {
+        val b = Store.settings.baseUrl
+        return b.contains("openrouter.ai") || b.contains("anthropic.com")
+    }
+
+    suspend fun analyzeFood(
+        photoPath: String,
+        comment: String,
+        myFoods: List<com.ritm.app.data.MyFood> = emptyList(),
+    ): FoodResult {
+        val web = Store.settings.foodWebSearch && webSearchAvailable()
         val hasPhoto = photoPath.isNotBlank() && java.io.File(photoPath).exists()
         val text = buildString {
             append("Посчитай КБЖУ этого приёма пищи.")
@@ -196,6 +225,10 @@ object AiClient {
 - Если граммов нет — оцени вес по фото (размер тарелки, приборов, упаковки). Если на фото этикетка — бери цифры с неё.
 - Используй стандартные таблицы пищевой ценности (USDA, таблицы Скурихина, данные производителей) на 100 г и пересчитай на вес.
 - Не забывай масло для жарки и соусы, если они явно есть или указаны.
+- Брендовые продукты (например «Теос» / Teos, «Простоквашино», «Савушкин», «ВкусВилл», протеиновые батончики)
+  — это конкретные товары, НЕ угадывай по названию. Teos — это греческий йогурт «Савушкин продукт».
+  ${if (web) "Найди точный состав производителя через поиск в интернете (сайты магазинов, производителя, Open Food Facts)." else "Используй известные тебе данные производителя; если не знаешь — ближайший аналог того же типа (например, греческий йогурт 2%)."}
+${if (myFoods.isNotEmpty()) "\nЛичный справочник пользователя — цифры на 100 г, они ТОЧНЫЕ, используй их в первую очередь, если продукт совпадает по смыслу:\n" + myFoods.take(120).joinToString("\n") { f -> "- ${f.name}: ${num(f.kcal)} ккал, Б ${num(Math.round(f.protein * 10) / 10.0)}, Ж ${num(Math.round(f.fat * 10) / 10.0)}, У ${num(Math.round(f.carbs * 10) / 10.0)}" } else ""}
 
 Ответь ТОЛЬКО JSON без markdown:
 {"title": "Рис с курицей", "items": [
@@ -224,9 +257,9 @@ object AiClient {
                             .put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$b64"))
                     )
                 }
-                return completeChat(system, emptyList(), maxTokens = 1200, extraUserContent = content)
+                return completeChat(system, emptyList(), maxTokens = 2500, extraUserContent = content, webSearch = web)
             }
-            return complete(system, text, maxTokens = 1200)
+            return completeChat(system, listOf("user" to text), maxTokens = 2500, webSearch = web)
         }
 
         val raw = try {

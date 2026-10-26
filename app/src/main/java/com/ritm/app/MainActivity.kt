@@ -29,6 +29,8 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) Store.rotateLaunchTheme()
         Reminders.rescheduleAll(this)
         com.ritm.app.update.Updater.autoCheck(this)
+        com.ritm.app.ai.AiJobs.init(this)
+        com.ritm.app.ai.AiJobs.resume()
         handleIntent(intent)
         setContent {
             RitmTheme {

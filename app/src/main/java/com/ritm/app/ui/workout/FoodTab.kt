@@ -280,6 +280,8 @@ fun FoodTab() {
 
 private fun closeEditor(id: Long) {
     val e = Store.food.find { it.id == id }
+    // продукты, которые поправил руками, запоминаем в «Мои продукты»
+    e?.items?.filter { it.edited }?.forEach { Store.rememberFood(it) }
     // ушёл из записи, не посчитав, — считаем сами в фоне
     if (e != null && !e.analyzed && e.items.isEmpty() && id !in Store.foodAnalyzing &&
         Store.settings.apiKey.isNotBlank() && (e.photoPath.isNotBlank() || e.note.isNotBlank())
@@ -664,10 +666,10 @@ private fun FoodItemRow(entryId: Long, item: FoodItem) {
                     ) else item.copy(grams = g)
                 )
             }
-            NumField("ккал", item.kcal, item.id, Modifier.weight(1.2f)) { Store.updateFoodItem(entryId, item.copy(kcal = it)) }
-            NumField("Б", item.protein, item.id, Modifier.weight(1f)) { Store.updateFoodItem(entryId, item.copy(protein = it)) }
-            NumField("Ж", item.fat, item.id, Modifier.weight(1f)) { Store.updateFoodItem(entryId, item.copy(fat = it)) }
-            NumField("У", item.carbs, item.id, Modifier.weight(1f)) { Store.updateFoodItem(entryId, item.copy(carbs = it)) }
+            NumField("ккал", item.kcal, item.id, Modifier.weight(1.2f)) { Store.updateFoodItem(entryId, item.copy(kcal = it, edited = true)) }
+            NumField("Б", item.protein, item.id, Modifier.weight(1f)) { Store.updateFoodItem(entryId, item.copy(protein = it, edited = true)) }
+            NumField("Ж", item.fat, item.id, Modifier.weight(1f)) { Store.updateFoodItem(entryId, item.copy(fat = it, edited = true)) }
+            NumField("У", item.carbs, item.id, Modifier.weight(1f)) { Store.updateFoodItem(entryId, item.copy(carbs = it, edited = true)) }
         }
     }
 }

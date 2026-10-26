@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.ritm.app.ai.AiClient
+import com.ritm.app.ai.AiJobs
 import com.ritm.app.notify.Reminders
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -79,7 +80,10 @@ object Store {
     }
 
     private fun load() {
-        if (!file.exists()) return
+        if (!file.exists()) {
+            myFoods = SEED_FOODS
+            return
+        }
         try {
             val o = JSONObject(file.readText())
             tasks = o.optJSONArray("tasks").mapObjects(Codec::taskFromJson)
@@ -89,6 +93,8 @@ object Store {
             food = o.optJSONArray("food").mapObjects(Codec::foodFromJson)
             goals = o.optJSONArray("goals").mapObjects(Codec::goalFromJson)
             checks = o.optJSONArray("checks").mapObjects(Codec::checkFromJson)
+            myFoods = o.optJSONArray("myFoods").mapObjects(Codec::myFoodFromJson)
+            if (!o.optBoolean("foodsSeeded")) myFoods = myFoods + SEED_FOODS.filter { s -> myFoods.none { it.name.equals(s.name, true) } }
             o.optJSONObject("settings")?.let { settings = Codec.settingsFromJson(it) }
             if (logs.any { it.dayNumber == 0 }) {
                 val ordered = logs.sortedBy { it.finishedAt }
@@ -120,6 +126,8 @@ object Store {
                 .put("food", food.toJsonArray(Codec::foodToJson))
                 .put("goals", goals.toJsonArray(Codec::goalToJson))
                 .put("checks", checks.toJsonArray(Codec::checkToJson))
+                .put("myFoods", myFoods.toJsonArray(Codec::myFoodToJson))
+                .put("foodsSeeded", true)
                 .put("settings", Codec.settingsToJson(settings))
                 .put("plannerDraft", plannerDraft)
                 .put("programDraft", programDraft)
@@ -375,12 +383,19 @@ object Store {
         val withUser = log.chat + ChatMsg("user", text.trim())
         logs = logs.map { if (it.id == logId) it.copy(chat = withUser) else it }
         save()
+        answerChat(logId)
+    }
+
+    /** Ответ тренера на последнее сообщение (используется и для докрутки после перезапуска). */
+    fun answerChat(logId: Long) {
+        val log = logs.find { it.id == logId } ?: return
+        if (log.chat.lastOrNull()?.role != "user" || logId in chatLoading) return
         chatLoading = chatLoading + logId
         chatErrors = chatErrors - logId
-        scope.launch {
+        AiJobs.run("chat:$logId") {
             try {
-                val current = logs.find { it.id == logId } ?: return@launch
-                val history = withUser.takeLast(20).map { it.role to it.text }
+                val current = logs.find { it.id == logId } ?: return@run
+                val history = current.chat.takeLast(20).map { it.role to it.text }
                 val answer = AiClient.trainerChat(current, history)
                 logs = logs.map { if (it.id == logId) it.copy(chat = it.chat + ChatMsg("assistant", answer)) else it }
                 save()
@@ -413,7 +428,7 @@ object Store {
                 older.filter { it.date.dayOfWeek == log.date.dayOfWeek }.maxByOrNull { it.finishedAt }
                     ?: older.maxByOrNull { it.finishedAt }
             }
-        scope.launch {
+        AiJobs.run("report:$logId") {
             try {
                 val text = AiClient.workoutReport(log, previous)
                 logs = logs.map { if (it.id == logId) it.copy(report = text) else it }
@@ -472,9 +487,10 @@ object Store {
         }
         foodAnalyzing = foodAnalyzing + id
         foodErrors = foodErrors - id
-        scope.launch {
+        AiJobs.run("food:$id") {
             try {
-                val r = AiClient.analyzeFood(entry.photoPath, entry.note)
+                val current = food.find { it.id == id } ?: return@run
+                val r = AiClient.analyzeFood(current.photoPath, current.note, myFoods)
                 food = food.map {
                     if (it.id == id) it.copy(
                         title = r.title,
@@ -489,6 +505,45 @@ object Store {
                 foodAnalyzing = foodAnalyzing - id
             }
         }
+    }
+
+    // ---------------- Мои продукты (справочник КБЖУ на 100 г) ----------------
+
+    var myFoods by mutableStateOf(listOf<MyFood>())
+        private set
+
+    private val SEED_FOODS = listOf(
+        MyFood("Теос (Teos) греческий йогурт 2%", 66.8, 8.0, 2.0, 4.2),
+    )
+
+    /** Запоминает продукт, который пользователь поправил вручную, — ИИ будет брать цифры отсюда. */
+    fun rememberFood(item: FoodItem) {
+        val name = item.name.trim()
+        if (name.isEmpty() || item.grams <= 0 || item.kcal <= 0) return
+        val k = 100.0 / item.grams
+        val f = MyFood(
+            name = name,
+            kcal = item.kcal * k,
+            protein = item.protein * k,
+            fat = item.fat * k,
+            carbs = item.carbs * k,
+        )
+        myFoods = listOf(f) + myFoods.filterNot { it.name.equals(name, ignoreCase = true) }
+        if (myFoods.size > 200) myFoods = myFoods.take(200)
+        save()
+    }
+
+    fun saveMyFood(f: MyFood, oldName: String? = null) {
+        if (f.name.isBlank()) return
+        myFoods = listOf(f) + myFoods.filterNot {
+            it.name.equals(f.name, ignoreCase = true) || (oldName != null && it.name.equals(oldName, ignoreCase = true))
+        }
+        save()
+    }
+
+    fun deleteMyFood(name: String) {
+        myFoods = myFoods.filterNot { it.name == name }
+        save()
     }
 
     fun deleteFood(id: Long) {

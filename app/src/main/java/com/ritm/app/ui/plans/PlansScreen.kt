@@ -498,6 +498,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
 
     fun setItems(l: List<AiClient.PlanItem>) {
         UiState.plannerItems = l
+        com.ritm.app.ai.AiJobs.savePlannerItems(l)
     }
 
     LazyColumn(
@@ -553,20 +554,7 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
                 }
                 Button(
                     onClick = {
-                        val request = text
-                        Store.scope.launch {
-                            UiState.plannerLoading = true
-                            UiState.plannerError = null
-                            try {
-                                val res = AiClient.parsePlan(request)
-                                UiState.plannerItems = res
-                                if (res.isEmpty()) UiState.plannerError = "Не нашёл задач в тексте"
-                            } catch (e: Exception) {
-                                UiState.plannerError = e.message ?: "Ошибка"
-                            } finally {
-                                UiState.plannerLoading = false
-                            }
-                        }
+                        com.ritm.app.ai.AiJobs.startPlanner(text)
                     },
                     enabled = text.isNotBlank() && !loading,
                     modifier = Modifier

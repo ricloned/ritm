@@ -413,19 +413,7 @@ private fun AiProgramPanel(onClose: () -> Unit) {
                 }
                 Button(
                     onClick = {
-                        val request = text
-                        val current = Store.program
-                        Store.scope.launch {
-                            UiState.programLoading = true
-                            UiState.programError = null
-                            try {
-                                UiState.programResult = AiClient.buildProgram(request, current)
-                            } catch (e: Exception) {
-                                UiState.programError = e.message ?: "Ошибка"
-                            } finally {
-                                UiState.programLoading = false
-                            }
-                        }
+                        com.ritm.app.ai.AiJobs.startProgram(text)
                     },
                     enabled = text.isNotBlank() && !loading,
                     modifier = Modifier
@@ -494,6 +482,7 @@ private fun AiProgramPanel(onClose: () -> Unit) {
                 Button(onClick = {
                     Store.replaceProgram(result.days)
                     UiState.programResult = null
+                    com.ritm.app.ai.AiJobs.saveProgramResult(null)
                     confirm = false
                     onClose()
                 }) { Text("Заменить") }

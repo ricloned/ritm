@@ -8,6 +8,7 @@ class RitmApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Store.init(this)
+        com.ritm.app.ai.AiJobs.init(this)
         Reminders.createChannels(this)
     }
 }
