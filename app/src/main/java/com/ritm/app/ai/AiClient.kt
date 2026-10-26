@@ -40,7 +40,12 @@ object AiClient {
         completeChat(system, listOf("user" to user), maxTokens)
 
     /** Диалог: список пар (role = "user" | "assistant", текст). */
-    suspend fun completeChat(system: String, messages: List<Pair<String, String>>, maxTokens: Int = 2000): String = withContext(Dispatchers.IO) {
+    suspend fun completeChat(
+        system: String,
+        messages: List<Pair<String, String>>,
+        maxTokens: Int = 2000,
+        extraUserContent: JSONArray? = null,
+    ): String = withContext(Dispatchers.IO) {
         val s = Store.settings
         if (s.apiKey.isBlank()) throw AiException("Добавь API-ключ в настройках (шестерёнка сверху)")
         if (s.model.isBlank()) throw AiException("Укажи модель в настройках")
@@ -59,6 +64,7 @@ object AiClient {
         val msgArray = JSONArray()
         if (!anthropic) msgArray.put(JSONObject().put("role", "system").put("content", system))
         messages.forEach { (role, text) -> msgArray.put(JSONObject().put("role", role).put("content", text)) }
+        extraUserContent?.let { content -> msgArray.put(JSONObject().put("role", "user").put("content", content)) }
         val body = if (anthropic) {
             JSONObject()
                 .put("model", s.model.trim())
@@ -138,6 +144,126 @@ object AiClient {
         } catch (_: Exception) {
             text.take(200).ifBlank { "пустой ответ" }
         }
+    }
+
+    // ---------------- КБЖУ по фото ----------------
+
+    data class FoodResult(
+        val title: String,
+        val items: List<com.ritm.app.data.FoodItem>,
+    )
+
+    private fun isAnthropic(): Boolean = Store.settings.baseUrl.contains("anthropic.com")
+
+    /** Уменьшает фото до ~1024 px и кодирует в base64 JPEG. */
+    private fun encodeImage(path: String): String {
+        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(path, opts)
+        if (opts.outWidth <= 0) throw AiException("Не удалось открыть фото")
+        var sample = 1
+        while (maxOf(opts.outWidth, opts.outHeight) / (sample * 2) >= 1024) sample *= 2
+        val bmp = android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+            ?: throw AiException("Не удалось открыть фото")
+        val scale = 1024f / maxOf(bmp.width, bmp.height)
+        val scaled = if (scale < 1f) {
+            android.graphics.Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true)
+        } else bmp
+        val out = java.io.ByteArrayOutputStream()
+        scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, out)
+        if (scaled !== bmp) scaled.recycle()
+        bmp.recycle()
+        return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+    }
+
+    suspend fun analyzeFood(photoPath: String, comment: String): FoodResult {
+        val hasPhoto = photoPath.isNotBlank() && java.io.File(photoPath).exists()
+        val text = buildString {
+            append("Посчитай КБЖУ этого приёма пищи.")
+            if (comment.isNotBlank()) {
+                append("\nМой комментарий (он ГЛАВНЕЕ фото — названия и граммовки бери отсюда): ").append(comment.trim())
+            } else {
+                append("\nКомментария нет — определи блюда и вес по фото.")
+            }
+        }
+        val system = """
+Ты — нутрициолог. Разложи приём пищи на продукты и посчитай КБЖУ каждого.
+
+Правила:
+- Комментарий пользователя важнее фото. Если он указал продукты и граммы — используй ровно их.
+  Если указал только название блюда — разложи блюдо на типичные ингредиенты.
+- Граммовки круп, макарон, риса, гречки, овсянки, бобовых пользователь пишет в СУХОМ виде — считай по сухому продукту,
+  если он сам не написал «варёный/готовый». Мясо и рыбу — в сыром виде, если не сказано иное.
+- Если граммов нет — оцени вес по фото (размер тарелки, приборов, упаковки). Если на фото этикетка — бери цифры с неё.
+- Используй стандартные таблицы пищевой ценности (USDA, таблицы Скурихина, данные производителей) на 100 г и пересчитай на вес.
+- Не забывай масло для жарки и соусы, если они явно есть или указаны.
+
+Ответь ТОЛЬКО JSON без markdown:
+{"title": "Рис с курицей", "items": [
+ {"name": "Рис белый (сухой)", "grams": 100, "kcal": 344, "protein": 6.7, "fat": 0.7, "carbs": 78.9},
+ {"name": "Куриное филе (сырое)", "grams": 200, "kcal": 226, "protein": 47.2, "fat": 3.8, "carbs": 0}
+]}
+Числа без единиц, до 1 знака после запятой. Если это не еда — "items": [].
+""".trim()
+
+        suspend fun ask(withPhoto: Boolean): String {
+            val content = JSONArray()
+            if (withPhoto) {
+                val b64 = withContext(Dispatchers.IO) { encodeImage(photoPath) }
+                if (isAnthropic()) {
+                    content.put(
+                        JSONObject().put("type", "image").put(
+                            "source",
+                            JSONObject().put("type", "base64").put("media_type", "image/jpeg").put("data", b64)
+                        )
+                    )
+                    content.put(JSONObject().put("type", "text").put("text", text))
+                } else {
+                    content.put(JSONObject().put("type", "text").put("text", text))
+                    content.put(
+                        JSONObject().put("type", "image_url")
+                            .put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$b64"))
+                    )
+                }
+                return completeChat(system, emptyList(), maxTokens = 1200, extraUserContent = content)
+            }
+            return complete(system, text, maxTokens = 1200)
+        }
+
+        val raw = try {
+            ask(hasPhoto)
+        } catch (e: AiException) {
+            // модель может не уметь в картинки — тогда считаем по комментарию
+            if (hasPhoto && comment.isNotBlank()) ask(false)
+            else if (hasPhoto) throw AiException("${e.message}\nЕсли модель не понимает фото — напиши состав в комментарии или выбери модель с поддержкой изображений.")
+            else throw e
+        }
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) throw AiException("ИИ не смог посчитать. Попробуй ещё раз.")
+        val o = try {
+            JSONObject(raw.substring(start, end + 1))
+        } catch (e: JSONException) {
+            throw AiException("ИИ вернул некорректный ответ. Попробуй ещё раз.")
+        }
+        val arr = o.optJSONArray("items") ?: JSONArray()
+        val items = ArrayList<com.ritm.app.data.FoodItem>()
+        for (i in 0 until arr.length()) {
+            val it = arr.optJSONObject(i) ?: continue
+            val name = it.optString("name").trim()
+            if (name.isEmpty()) continue
+            items.add(
+                com.ritm.app.data.FoodItem(
+                    id = 0,
+                    name = name,
+                    grams = firstDouble(it.opt("grams")),
+                    kcal = firstDouble(it.opt("kcal")),
+                    protein = firstDouble(it.opt("protein")),
+                    fat = firstDouble(it.opt("fat")),
+                    carbs = firstDouble(it.opt("carbs")),
+                )
+            )
+        }
+        return FoodResult(o.optString("title").trim().ifBlank { "Еда" }, items)
     }
 
     // ---------------- Планировщик ----------------

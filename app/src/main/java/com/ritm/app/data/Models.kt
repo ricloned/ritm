@@ -56,13 +56,37 @@ data class WorkoutDraft(
     val sets: Map<Long, List<SetEntry>>,
 )
 
+/** Продукт в приёме пищи. Граммы — как указал пользователь (крупы/макароны — в сухом виде). */
+data class FoodItem(
+    val id: Long,
+    val name: String,
+    val grams: Double = 0.0,
+    val kcal: Double = 0.0,
+    val protein: Double = 0.0,
+    val fat: Double = 0.0,
+    val carbs: Double = 0.0,
+)
+
 data class FoodEntry(
     val id: Long,
     val date: LocalDate,
     val time: Long,
+    /** Пусто — запись без фото. */
     val photoPath: String,
+    /** Комментарий пользователя: состав, граммовки, название блюда. */
     val note: String = "",
-)
+    /** Название блюда (от ИИ или своё). */
+    val title: String = "",
+    val items: List<FoodItem> = emptyList(),
+    /** ИИ уже считал этот приём. */
+    val analyzed: Boolean = false,
+) {
+    val hasNutrition: Boolean get() = items.isNotEmpty()
+    val kcal: Double get() = items.sumOf { it.kcal }
+    val protein: Double get() = items.sumOf { it.protein }
+    val fat: Double get() = items.sumOf { it.fat }
+    val carbs: Double get() = items.sumOf { it.carbs }
+}
 
 data class Goal(
     val id: Long,
@@ -95,6 +119,10 @@ data class AppSettings(
     val workoutMinute: Int = 0,
     val foodReminders: Boolean = true,
     val foodTimes: List<Int> = listOf(9 * 60, 14 * 60, 19 * 60),
+    val kcalGoal: Int = 2500,
+    val proteinGoal: Int = 160,
+    val fatGoal: Int = 75,
+    val carbsGoal: Int = 260,
     val weeklyReminder: Boolean = true,
     val weeklyDay: Int = 7,
     val weeklyHour: Int = 10,
@@ -104,6 +132,9 @@ data class AppSettings(
 )
 
 // ---------- JSON ----------
+
+internal fun JSONObject.numOrNull(key: String): Double? =
+    if (!has(key) || isNull(key)) null else optDouble(key).takeIf { !it.isNaN() }
 
 internal fun JSONObject.strOrNull(key: String): String? = if (isNull(key)) null else optString(key)
 
@@ -201,17 +232,53 @@ internal object Codec {
         },
     )
 
+    fun foodItemToJson(i: FoodItem): JSONObject = JSONObject()
+        .put("id", i.id).put("name", i.name).put("grams", i.grams).put("kcal", i.kcal)
+        .put("protein", i.protein).put("fat", i.fat).put("carbs", i.carbs)
+
+    fun foodItemFromJson(o: JSONObject): FoodItem = FoodItem(
+        id = o.optLong("id", System.nanoTime()),
+        name = o.optString("name"),
+        grams = o.numOrNull("grams") ?: 0.0,
+        kcal = o.numOrNull("kcal") ?: 0.0,
+        protein = o.numOrNull("protein") ?: 0.0,
+        fat = o.numOrNull("fat") ?: 0.0,
+        carbs = o.numOrNull("carbs") ?: 0.0,
+    )
+
     fun foodToJson(f: FoodEntry): JSONObject = JSONObject()
         .put("id", f.id).put("date", f.date.toString()).put("time", f.time)
         .put("photoPath", f.photoPath).put("note", f.note)
+        .put("title", f.title).put("analyzed", f.analyzed)
+        .put("items", f.items.toJsonArray(::foodItemToJson))
 
-    fun foodFromJson(o: JSONObject): FoodEntry = FoodEntry(
-        id = o.getLong("id"),
-        date = LocalDate.parse(o.getString("date")),
-        time = o.optLong("time"),
-        photoPath = o.getString("photoPath"),
-        note = o.optString("note"),
-    )
+    fun foodFromJson(o: JSONObject): FoodEntry {
+        val arr = o.optJSONArray("items")
+        val items = if (arr != null) arr.mapObjects(::foodItemFromJson) else {
+            // старый формат: состав строкой + итоговые цифры
+            val kcal = o.numOrNull("kcal")
+            if (kcal == null) emptyList() else listOf(
+                FoodItem(
+                    id = o.getLong("id") + 1,
+                    name = o.optString("items").ifBlank { o.optString("title").ifBlank { "Блюдо" } },
+                    kcal = kcal,
+                    protein = o.numOrNull("protein") ?: 0.0,
+                    fat = o.numOrNull("fat") ?: 0.0,
+                    carbs = o.numOrNull("carbs") ?: 0.0,
+                )
+            )
+        }
+        return FoodEntry(
+            id = o.getLong("id"),
+            date = LocalDate.parse(o.getString("date")),
+            time = o.optLong("time"),
+            photoPath = o.optString("photoPath"),
+            note = o.optString("note"),
+            title = o.optString("title"),
+            items = items,
+            analyzed = o.optBoolean("analyzed", items.isNotEmpty()),
+        )
+    }
 
     fun goalToJson(g: Goal): JSONObject = JSONObject()
         .put("id", g.id).put("title", g.title).put("emoji", g.emoji)
@@ -241,6 +308,8 @@ internal object Codec {
         .put("foodReminders", s.foodReminders)
         .put("foodTimes", JSONArray().also { a -> s.foodTimes.forEach { a.put(it) } })
         .put("themeMode", s.themeMode).put("themeIndex", s.themeIndex)
+        .put("kcalGoal", s.kcalGoal).put("proteinGoal", s.proteinGoal)
+        .put("fatGoal", s.fatGoal).put("carbsGoal", s.carbsGoal)
         .put("weeklyReminder", s.weeklyReminder).put("weeklyDay", s.weeklyDay)
         .put("weeklyHour", s.weeklyHour).put("weeklyMinute", s.weeklyMinute)
 
@@ -260,6 +329,10 @@ internal object Codec {
             foodTimes = o.optJSONArray("foodTimes")?.let { a ->
                 (0 until a.length()).map { a.optInt(it) }.filter { it in 0 until 24 * 60 }.sorted()
             } ?: d.foodTimes,
+            kcalGoal = o.optInt("kcalGoal", d.kcalGoal),
+            proteinGoal = o.optInt("proteinGoal", d.proteinGoal),
+            fatGoal = o.optInt("fatGoal", d.fatGoal),
+            carbsGoal = o.optInt("carbsGoal", d.carbsGoal),
             weeklyReminder = o.optBoolean("weeklyReminder", d.weeklyReminder),
             weeklyDay = o.optInt("weeklyDay", d.weeklyDay).coerceIn(1, 7),
             weeklyHour = o.optInt("weeklyHour", d.weeklyHour),

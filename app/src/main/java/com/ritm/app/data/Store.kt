@@ -428,22 +428,72 @@ object Store {
 
     // ---------------- Питание ----------------
 
-    fun addFood(date: LocalDate, path: String) {
-        food = food + FoodEntry(id = newId(), date = date, time = System.currentTimeMillis(), photoPath = path)
+    var foodAnalyzing by mutableStateOf(setOf<Long>())
+        private set
+    var foodErrors by mutableStateOf(mapOf<Long, String>())
+        private set
+
+    /** Новый приём пищи. Возвращает id. [path] пустой — без фото. */
+    fun addFood(date: LocalDate, path: String): Long {
+        val entry = FoodEntry(id = newId(), date = date, time = System.currentTimeMillis(), photoPath = path)
+        food = food + entry
+        save()
+        return entry.id
+    }
+
+    fun updateFood(entry: FoodEntry) {
+        food = food.map { if (it.id == entry.id) entry else it }
         save()
     }
 
-    fun updateFoodNote(id: Long, note: String) {
-        food = food.map { if (it.id == id) it.copy(note = note) else it }
+    private fun mapFood(id: Long, f: (FoodEntry) -> FoodEntry) {
+        food = food.map { if (it.id == id) f(it) else it }
         save()
+    }
+
+    fun updateFoodNote(id: Long, note: String) = mapFood(id) { it.copy(note = note) }
+    fun updateFoodTitle(id: Long, title: String) = mapFood(id) { it.copy(title = title) }
+
+    fun updateFoodItem(id: Long, item: FoodItem) = mapFood(id) { e ->
+        e.copy(items = e.items.map { if (it.id == item.id) item else it })
+    }
+
+    fun addFoodItem(id: Long) = mapFood(id) { e -> e.copy(items = e.items + FoodItem(id = newId(), name = "")) }
+
+    fun removeFoodItem(id: Long, itemId: Long) = mapFood(id) { e -> e.copy(items = e.items.filterNot { it.id == itemId }) }
+
+    /** ИИ считает КБЖУ: по комментарию (главное) и по фото. */
+    fun analyzeFood(id: Long) {
+        val entry = food.find { it.id == id } ?: return
+        if (id in foodAnalyzing) return
+        if (entry.photoPath.isBlank() && entry.note.isBlank()) {
+            foodErrors = foodErrors + (id to "Напиши, что ты съел, — без фото ИИ больше не на что опереться")
+            return
+        }
+        foodAnalyzing = foodAnalyzing + id
+        foodErrors = foodErrors - id
+        scope.launch {
+            try {
+                val r = AiClient.analyzeFood(entry.photoPath, entry.note)
+                food = food.map {
+                    if (it.id == id) it.copy(
+                        title = r.title,
+                        items = r.items.map { item -> item.copy(id = newId()) },
+                        analyzed = true,
+                    ) else it
+                }
+                save()
+            } catch (e: Exception) {
+                foodErrors = foodErrors + (id to (e.message ?: "Не удалось посчитать"))
+            } finally {
+                foodAnalyzing = foodAnalyzing - id
+            }
+        }
     }
 
     fun deleteFood(id: Long) {
         food.find { it.id == id }?.let { entry ->
-            try {
-                File(entry.photoPath).delete()
-            } catch (_: Exception) {
-            }
+            if (entry.photoPath.isNotBlank()) deleteFile(entry.photoPath)
         }
         food = food.filterNot { it.id == id }
         save()

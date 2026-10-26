@@ -52,6 +52,9 @@ object UiState {
     var compareA by mutableStateOf<Long?>(null)
     var compareB by mutableStateOf<Long?>(null)
 
+    /** Открытый приём пищи (редактор КБЖУ). */
+    var foodEditId by mutableStateOf<Long?>(null)
+
     /** Открыть камеру для еды (из уведомления). */
     var openFoodCamera by mutableStateOf(false)
 

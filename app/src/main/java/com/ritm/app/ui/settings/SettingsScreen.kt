@@ -289,6 +289,23 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
             }
 
+            // ---------- Питание ----------
+            SectionTitle("Норма питания в день")
+            SoftCard {
+                Text(
+                    "С этими цифрами сравнивается итог дня во вкладке «Питание».",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cs.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GoalField("Ккал", s.kcalGoal, Modifier.weight(1.2f)) { commit(s.copy(kcalGoal = it)) }
+                    GoalField("Белки", s.proteinGoal, Modifier.weight(1f)) { commit(s.copy(proteinGoal = it)) }
+                    GoalField("Жиры", s.fatGoal, Modifier.weight(1f)) { commit(s.copy(fatGoal = it)) }
+                    GoalField("Угл.", s.carbsGoal, Modifier.weight(1f)) { commit(s.copy(carbsGoal = it)) }
+                }
+            }
+
             // ---------- Уведомления ----------
             SectionTitle("Уведомления")
             SoftCard {
@@ -450,6 +467,23 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+@Composable
+private fun GoalField(label: String, value: Int, modifier: Modifier, onValue: (Int) -> Unit) {
+    var text by remember(label) { mutableStateOf(value.toString()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { v ->
+            text = v.filter { it.isDigit() }.take(5)
+            text.toIntOrNull()?.let(onValue)
+        },
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+    )
 }
 
 @Composable
