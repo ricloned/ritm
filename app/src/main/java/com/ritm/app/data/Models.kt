@@ -127,6 +127,8 @@ data class AppSettings(
     val weeklyDay: Int = 7,
     val weeklyHour: Int = 10,
     val weeklyMinute: Int = 0,
+    val updateRepo: String = "ricloned/ritm",
+    val githubToken: String = "",
     val themeMode: String = "fixed",
     val themeIndex: Int = 0,
 )
@@ -308,6 +310,7 @@ internal object Codec {
         .put("foodReminders", s.foodReminders)
         .put("foodTimes", JSONArray().also { a -> s.foodTimes.forEach { a.put(it) } })
         .put("themeMode", s.themeMode).put("themeIndex", s.themeIndex)
+        .put("updateRepo", s.updateRepo).put("githubToken", s.githubToken)
         .put("kcalGoal", s.kcalGoal).put("proteinGoal", s.proteinGoal)
         .put("fatGoal", s.fatGoal).put("carbsGoal", s.carbsGoal)
         .put("weeklyReminder", s.weeklyReminder).put("weeklyDay", s.weeklyDay)
@@ -337,6 +340,8 @@ internal object Codec {
             weeklyDay = o.optInt("weeklyDay", d.weeklyDay).coerceIn(1, 7),
             weeklyHour = o.optInt("weeklyHour", d.weeklyHour),
             weeklyMinute = o.optInt("weeklyMinute", d.weeklyMinute),
+            updateRepo = o.optString("updateRepo", d.updateRepo).ifBlank { d.updateRepo },
+            githubToken = o.optString("githubToken", d.githubToken),
             themeMode = o.optString("themeMode", d.themeMode),
             themeIndex = o.optInt("themeIndex", d.themeIndex),
         )

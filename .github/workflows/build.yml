@@ -55,3 +55,4 @@ jobs:
           tag_name: v${{ steps.ver.outputs.name }}-build${{ github.run_number }}
           name: Ритм ${{ steps.ver.outputs.name }} (сборка ${{ github.run_number }})
           files: Ritm-*.apk
+          body_path: whatsnew.txt

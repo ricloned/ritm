@@ -2,6 +2,8 @@ package com.ritm.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import com.ritm.app.update.UpdateBanner
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -101,11 +103,16 @@ fun MainScreen() {
                 .consumeWindowInsets(pad)
                 .imePadding()
         ) {
+            Column(Modifier.fillMaxSize()) {
+            UpdateBanner(onOpenSettings = { showSettings = true })
+            Box(Modifier.weight(1f)) {
             when (tab) {
                 MainTab.Plans -> PlansScreen()
                 MainTab.Workout -> WorkoutScreen()
                 MainTab.Progress -> ProgressScreen()
                 MainTab.Goals -> GoalsScreen()
+            }
+            }
             }
         }
     }

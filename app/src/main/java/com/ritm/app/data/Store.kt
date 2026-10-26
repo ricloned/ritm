@@ -587,7 +587,7 @@ object Store {
         val old = settings
         settings = n
         save()
-        val strip = { s: AppSettings -> s.copy(baseUrl = "", apiKey = "", model = "", themeMode = "", themeIndex = 0) }
+        val strip = { s: AppSettings -> s.copy(baseUrl = "", apiKey = "", model = "", themeMode = "", themeIndex = 0, updateRepo = "", githubToken = "") }
         if (strip(old) != strip(n)) Reminders.scheduleDaily(appContext)
     }
 

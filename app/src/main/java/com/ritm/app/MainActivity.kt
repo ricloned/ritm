@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
         Store.carryOver()
         if (savedInstanceState == null) Store.rotateLaunchTheme()
         Reminders.rescheduleAll(this)
+        com.ritm.app.update.Updater.autoCheck(this)
         handleIntent(intent)
         setContent {
             RitmTheme {

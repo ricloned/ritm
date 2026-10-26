@@ -17,6 +17,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import com.ritm.app.ui.UiState
+import com.ritm.app.update.UpdateSection
 import com.ritm.app.ui.shortRu
 import com.ritm.app.ui.theme.THEMES
 import com.ritm.app.ui.theme.previewColor
@@ -450,14 +451,43 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             // ---------- О приложении ----------
-            SectionTitle("О приложении")
+            SectionTitle("Обновления")
             SoftCard {
-                Text("Ритм", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Версия ${BuildConfig.VERSION_NAME} (сборка ${BuildConfig.VERSION_CODE})",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant
+                UpdateSection()
+                HorizontalDivider(Modifier.padding(vertical = 12.dp), color = cs.outlineVariant)
+                OutlinedTextField(
+                    value = s.updateRepo,
+                    onValueChange = { commit(s.copy(updateRepo = it.trim())) },
+                    label = { Text("Репозиторий GitHub") },
+                    placeholder = { Text("ricloned/ritm") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
                 )
+                Spacer(Modifier.height(8.dp))
+                var showToken by remember { mutableStateOf(false) }
+                OutlinedTextField(
+                    value = s.githubToken,
+                    onValueChange = { commit(s.copy(githubToken = it.trim())) },
+                    label = { Text("GitHub-токен (для приватного репо)") },
+                    placeholder = { Text("github_pat_...") },
+                    singleLine = true,
+                    visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showToken = !showToken }) {
+                            Icon(if (showToken) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, "Показать")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                )
+                Text(
+                    "Нужен, только если репозиторий приватный. GitHub → Settings → Developer settings → Fine-grained tokens: доступ только к репо ritm, право Contents: Read-only.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                Spacer(Modifier.height(8.dp))
                 Text(
                     "Все данные хранятся только на телефоне.",
                     style = MaterialTheme.typography.bodySmall,
