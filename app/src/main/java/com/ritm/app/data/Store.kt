@@ -57,6 +57,10 @@ object Store {
         private set
     var reportErrors by mutableStateOf(mapOf<Long, String>())
         private set
+    var chatLoading by mutableStateOf(setOf<Long>())
+        private set
+    var chatErrors by mutableStateOf(mapOf<Long, String>())
+        private set
 
     @Synchronized
     fun init(ctx: Context) {
@@ -363,6 +367,34 @@ object Store {
         logs = (logs + newLogs).sortedWith(compareByDescending<WorkoutLog> { it.dayNumber }.thenByDescending { it.finishedAt })
         save()
         return newLogs.size
+    }
+
+    fun sendChat(logId: Long, text: String) {
+        val log = logs.find { it.id == logId } ?: return
+        if (text.isBlank() || logId in chatLoading) return
+        val withUser = log.chat + ChatMsg("user", text.trim())
+        logs = logs.map { if (it.id == logId) it.copy(chat = withUser) else it }
+        save()
+        chatLoading = chatLoading + logId
+        chatErrors = chatErrors - logId
+        scope.launch {
+            try {
+                val current = logs.find { it.id == logId } ?: return@launch
+                val history = withUser.takeLast(20).map { it.role to it.text }
+                val answer = AiClient.trainerChat(current, history)
+                logs = logs.map { if (it.id == logId) it.copy(chat = it.chat + ChatMsg("assistant", answer)) else it }
+                save()
+            } catch (e: Exception) {
+                chatErrors = chatErrors + (logId to (e.message ?: "Не удалось получить ответ"))
+            } finally {
+                chatLoading = chatLoading - logId
+            }
+        }
+    }
+
+    fun clearChat(logId: Long) {
+        logs = logs.map { if (it.id == logId) it.copy(chat = emptyList()) else it }
+        save()
     }
 
     fun deleteLog(id: Long) {

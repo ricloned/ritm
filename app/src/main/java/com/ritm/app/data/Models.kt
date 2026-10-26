@@ -46,7 +46,10 @@ data class WorkoutLog(
     val report: String? = null,
     val finishedAt: Long = System.currentTimeMillis(),
     val dayNumber: Int = 0,
+    val chat: List<ChatMsg> = emptyList(),
 )
+
+data class ChatMsg(val role: String, val text: String)
 
 data class WorkoutDraft(
     val date: LocalDate,
@@ -170,6 +173,7 @@ internal object Codec {
         .put("report", l.report ?: JSONObject.NULL)
         .put("finishedAt", l.finishedAt)
         .put("dayNumber", l.dayNumber)
+        .put("chat", l.chat.toJsonArray { JSONObject().put("role", it.role).put("text", it.text) })
         .put("exercises", l.exercises.toJsonArray { e ->
             JSONObject()
                 .put("name", e.name)
@@ -185,6 +189,7 @@ internal object Codec {
         report = o.strOrNull("report"),
         finishedAt = o.optLong("finishedAt"),
         dayNumber = o.optInt("dayNumber", 0),
+        chat = o.optJSONArray("chat").mapObjects { ChatMsg(it.optString("role"), it.optString("text")) },
         exercises = o.optJSONArray("exercises").mapObjects { e ->
             ExerciseLog(
                 name = e.getString("name"),
@@ -336,15 +341,26 @@ fun SetEntry.lineText(): String {
 }
 
 /** Тренировка в формате «День N / Круг 1 / Упражнение 75кг на 15». */
+/** Упражнения «на 1 круг» (кардио, растяжка) при многокруговой тренировке идут в блок «Финиш». */
+fun isFinisher(targetSets: Int, maxTargetSets: Int): Boolean = targetSets == 1 && maxTargetSets > 1
+
 fun WorkoutLog.toText(withHeader: Boolean = true): String = buildString {
     if (withHeader) appendLine(if (dayNumber > 0) "День $dayNumber" else "Тренировка")
-    val rounds = exercises.maxOfOrNull { it.sets.size } ?: 0
+    val maxTarget = exercises.maxOfOrNull { it.targetSets } ?: 0
+    val main = exercises.filter { !isFinisher(it.targetSets, maxTarget) }
+    val finish = exercises.filter { isFinisher(it.targetSets, maxTarget) && it.sets.isNotEmpty() }
+    val rounds = main.maxOfOrNull { it.sets.size } ?: 0
     for (r in 0 until rounds) {
         if (r > 0) appendLine()
         appendLine("Круг ${r + 1}")
-        exercises.forEach { e ->
+        main.forEach { e ->
             e.sets.getOrNull(r)?.let { appendLine("${e.name} ${it.lineText()}") }
         }
+    }
+    if (finish.isNotEmpty()) {
+        appendLine()
+        appendLine("Финиш")
+        finish.forEach { e -> e.sets.forEach { appendLine("${e.name} ${it.lineText()}") } }
     }
     val skipped = exercises.filter { it.sets.isEmpty() }
     if (skipped.isNotEmpty()) {

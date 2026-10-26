@@ -23,6 +23,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -121,7 +125,11 @@ fun TodayTab(onOpenProgram: () -> Unit) {
     }
 
     val allSets = exercises.map { Store.setsFor(today, it) }
-    val rounds = allSets.maxOfOrNull { it.size } ?: 0
+    val maxTarget = exercises.maxOfOrNull { it.sets } ?: 0
+    val finishers = exercises.filter { com.ritm.app.data.isFinisher(it.sets, maxTarget) }
+    val mainExercises = exercises.filter { it !in finishers }
+    val mainRounds = mainExercises.maxOfOrNull { Store.setsFor(today, it).size } ?: 0
+    val rounds = mainRounds
     val doneSets = allSets.sumOf { l -> l.count { it.done } }
     val totalSets = allSets.sumOf { it.size }
 
@@ -161,16 +169,21 @@ fun TodayTab(onOpenProgram: () -> Unit) {
             return@LazyColumn
         }
 
-        for (r in 0 until rounds) {
+        for (r in 0 until mainRounds) {
             item(key = "round$r") {
-                RoundCard(r, exercises.filter { Store.setsFor(today, it).size > r })
+                RoundCard("Круг ${r + 1}", r, mainExercises.filter { Store.setsFor(today, it).size > r })
+            }
+        }
+        if (finishers.isNotEmpty()) {
+            item(key = "finish_block") {
+                RoundCard("Финиш", 0, finishers)
             }
         }
 
         item(key = "roundButtons") {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 FilledTonalButton(
-                    onClick = { Store.addRound(today, exercises) },
+                    onClick = { Store.addRound(today, mainExercises) },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(14.dp)
                 ) {
@@ -179,7 +192,7 @@ fun TodayTab(onOpenProgram: () -> Unit) {
                     Text("Круг")
                 }
                 OutlinedButton(
-                    onClick = { Store.removeRound(today, exercises) },
+                    onClick = { Store.removeRound(today, mainExercises) },
                     enabled = rounds > 1,
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(14.dp)
@@ -253,14 +266,14 @@ private fun DayChips(selected: Int, todayDay: Int, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-private fun RoundCard(round: Int, exercises: List<Exercise>) {
+private fun RoundCard(title: String, round: Int, exercises: List<Exercise>) {
     val cs = MaterialTheme.colorScheme
     val today = UiState.today
     val done = exercises.count { Store.setsFor(today, it).getOrNull(round)?.done == true }
     SoftCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Круг ${round + 1}",
+                title,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = cs.primary,
@@ -409,37 +422,16 @@ fun LogContent(log: WorkoutLog) {
     val cs = MaterialTheme.colorScheme
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val rounds = log.exercises.maxOfOrNull { it.sets.size } ?: 0
+    val maxTarget = log.exercises.maxOfOrNull { it.targetSets } ?: 0
+    val main = log.exercises.filter { !com.ritm.app.data.isFinisher(it.targetSets, maxTarget) }
+    val finish = log.exercises.filter { com.ritm.app.data.isFinisher(it.targetSets, maxTarget) && it.sets.isNotEmpty() }
+    val rounds = main.maxOfOrNull { it.sets.size } ?: 0
     Column {
         for (r in 0 until rounds) {
-            Text(
-                "Круг ${r + 1}",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = cs.primary,
-                modifier = Modifier.padding(top = if (r == 0) 0.dp else 10.dp, bottom = 2.dp)
-            )
-            log.exercises.forEach { e ->
-                val s = e.sets.getOrNull(r) ?: return@forEach
-                Text(
-                    buildAnnotatedString {
-                        append(e.name + " ")
-                        val w = s.weight.toDoubleOrNull()
-                        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                            append(
-                                if (w != null && w > 0) "${com.ritm.app.ui.fmtNum(w)}кг на ${s.reps}" else "на ${s.reps}"
-                            )
-                        }
-                        if (s.comment.isNotBlank()) {
-                            withStyle(SpanStyle(color = cs.onSurfaceVariant, fontStyle = FontStyle.Italic)) {
-                                append(" (${s.comment.trim()})")
-                            }
-                        }
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(vertical = 1.dp)
-                )
-            }
+            LogSection("Круг ${r + 1}", r == 0, main.mapNotNull { e -> e.sets.getOrNull(r)?.let { e.name to it } })
+        }
+        if (finish.isNotEmpty()) {
+            LogSection("Финиш", rounds == 0, finish.flatMap { e -> e.sets.map { e.name to it } })
         }
         val skipped = log.exercises.filter { it.sets.isEmpty() }
         if (skipped.isNotEmpty()) {
@@ -462,6 +454,163 @@ fun LogContent(log: WorkoutLog) {
             Text("Скопировать текстом", style = MaterialTheme.typography.labelMedium)
         }
         ReportBlock(log)
+        TrainerChat(log)
+    }
+}
+
+@Composable
+private fun LogSection(title: String, first: Boolean, rows: List<Pair<String, SetEntry>>) {
+    val cs = MaterialTheme.colorScheme
+    Text(
+        title,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = cs.primary,
+        modifier = Modifier.padding(top = if (first) 0.dp else 10.dp, bottom = 2.dp)
+    )
+    rows.forEach { (name, s) ->
+        Text(
+            buildAnnotatedString {
+                append("$name ")
+                val w = s.weight.toDoubleOrNull()
+                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                    append(if (w != null && w > 0) "${com.ritm.app.ui.fmtNum(w)}кг на ${s.reps}" else "на ${s.reps}")
+                }
+                if (s.comment.isNotBlank()) {
+                    withStyle(SpanStyle(color = cs.onSurfaceVariant, fontStyle = FontStyle.Italic)) {
+                        append(" (${s.comment.trim()})")
+                    }
+                }
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(vertical = 1.dp)
+        )
+    }
+}
+
+// ======================= Чат с тренером =======================
+
+@Composable
+private fun TrainerChat(log: WorkoutLog) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember(log.id) { mutableStateOf(log.chat.isNotEmpty()) }
+    var input by remember(log.id) { mutableStateOf("") }
+    val loading = log.id in Store.chatLoading
+    val error = Store.chatErrors[log.id]
+    val dictate = com.ritm.app.ui.rememberDictation("Спроси тренера…") { r ->
+        input = com.ritm.app.ui.appendDictated(input, r)
+    }
+
+    Spacer(Modifier.height(8.dp))
+    if (!open) {
+        OutlinedButton(
+            onClick = { open = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Icon(Icons.Rounded.Forum, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Обсудить с тренером")
+        }
+        return
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(cs.surfaceContainer)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Forum, null, Modifier.size(18.dp), tint = cs.primary)
+            Spacer(Modifier.width(6.dp))
+            Text("Чат с тренером", style = MaterialTheme.typography.labelLarge, color = cs.primary, modifier = Modifier.weight(1f))
+            if (log.chat.isNotEmpty()) {
+                TextButton(onClick = { Store.clearChat(log.id) }) {
+                    Text("Очистить", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                }
+            }
+        }
+        if (log.chat.isEmpty()) {
+            Text(
+                "Спроси что угодно по этой тренировке: почему такой совет, какой вес ставить, что заменить. Можно поправить тренера, если он ошибся.",
+                style = MaterialTheme.typography.bodySmall,
+                color = cs.onSurfaceVariant
+            )
+        }
+        log.chat.forEach { m ->
+            val mine = m.role == "user"
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
+                Text(
+                    if (mine) m.text else m.text.cleanMd(),
+                    modifier = Modifier
+                        .fillMaxWidth(0.86f)
+                        .wrapContentWidth(if (mine) Alignment.End else Alignment.Start)
+                        .clip(
+                            RoundedCornerShape(
+                                topStart = 16.dp, topEnd = 16.dp,
+                                bottomStart = if (mine) 16.dp else 4.dp,
+                                bottomEnd = if (mine) 4.dp else 16.dp
+                            )
+                        )
+                        .background(if (mine) cs.primary else cs.surface)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (mine) cs.onPrimary else cs.onSurface
+                )
+            }
+        }
+        if (loading) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = cs.primary)
+                Spacer(Modifier.width(8.dp))
+                Text("Тренер печатает…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            }
+        }
+        if (error != null) {
+            Text(error, style = MaterialTheme.typography.bodySmall, color = cs.error)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) {
+                BasicTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = cs.onSurface),
+                    cursorBrush = SolidColor(cs.primary),
+                    maxLines = 5,
+                    decorationBox = { inner ->
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(cs.surface)
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            if (input.isEmpty()) {
+                                Text(
+                                    "Написать тренеру…",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = cs.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            }
+                            inner()
+                        }
+                    },
+                )
+            }
+            IconButton(onClick = dictate) { Icon(Icons.Rounded.Mic, "Надиктовать", tint = cs.onSurfaceVariant) }
+            IconButton(
+                onClick = {
+                    Store.sendChat(log.id, input)
+                    input = ""
+                },
+                enabled = input.isNotBlank() && !loading
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.Send, "Отправить", tint = if (input.isNotBlank() && !loading) cs.primary else cs.outline)
+            }
+        }
     }
 }
 

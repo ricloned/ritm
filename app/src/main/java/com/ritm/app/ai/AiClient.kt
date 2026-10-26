@@ -36,7 +36,11 @@ object AiClient {
 
     private val RU: Locale = Locale.forLanguageTag("ru-RU")
 
-    suspend fun complete(system: String, user: String, maxTokens: Int = 2000): String = withContext(Dispatchers.IO) {
+    suspend fun complete(system: String, user: String, maxTokens: Int = 2000): String =
+        completeChat(system, listOf("user" to user), maxTokens)
+
+    /** Диалог: список пар (role = "user" | "assistant", текст). */
+    suspend fun completeChat(system: String, messages: List<Pair<String, String>>, maxTokens: Int = 2000): String = withContext(Dispatchers.IO) {
         val s = Store.settings
         if (s.apiKey.isBlank()) throw AiException("Добавь API-ключ в настройках (шестерёнка сверху)")
         if (s.model.isBlank()) throw AiException("Укажи модель в настройках")
@@ -52,21 +56,20 @@ object AiClient {
             else -> "$base/chat/completions"
         }
 
+        val msgArray = JSONArray()
+        if (!anthropic) msgArray.put(JSONObject().put("role", "system").put("content", system))
+        messages.forEach { (role, text) -> msgArray.put(JSONObject().put("role", role).put("content", text)) }
         val body = if (anthropic) {
             JSONObject()
                 .put("model", s.model.trim())
                 .put("max_tokens", maxTokens)
                 .put("system", system)
-                .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", user)))
+                .put("messages", msgArray)
         } else {
             JSONObject()
                 .put("model", s.model.trim())
-                .put("temperature", 0.3)
-                .put(
-                    "messages", JSONArray()
-                        .put(JSONObject().put("role", "system").put("content", system))
-                        .put(JSONObject().put("role", "user").put("content", user))
-                )
+                .put("temperature", 0.4)
+                .put("messages", msgArray)
         }
 
         val conn = try {
@@ -212,11 +215,33 @@ $calendar
         return "${e.name} ($plan): $done"
     }
 
+    private fun planText(log: WorkoutLog): String = log.exercises.joinToString("\n") { e ->
+        val done = e.sets.size
+        val status = when {
+            done == 0 -> "не делал"
+            done < e.targetSets -> "сделал $done из ${e.targetSets}"
+            else -> "выполнено"
+        }
+        "- ${e.name}: по плану ${e.targetSets} ${com.ritm.app.data.roundsWord(e.targetSets)} — $status"
+    }
+
+    private val TRAINER_RULES = """
+Пользователь тренируется круговым методом: проходит упражнения подряд, потом следующий круг.
+У упражнений РАЗНОЕ число кругов по плану (например, главное упражнение — 4 круга, база — 3, изоляция — 2, кардио — 1).
+Поэтому поздние круги короче — это НОРМАЛЬНО и задумано программой. Никогда не называй это «оборвался», «недоделал» или «не хватило сил».
+Недоделкой считается только то, что прямо помечено «сделал X из Y» или «не делал».
+Формат записи: «Упражнение 75кг на 15 (комментарий)». Цель пользователя — рекомпозиция: мышцы и рост рабочих весов при сжигании жира;
+базовые упражнения он делает на 8–9 повторений в первом круге, прибавляет вес, когда во всех кругах выходит 10.
+""".trim()
+
     suspend fun workoutReport(log: WorkoutLog, previous: WorkoutLog?): String {
         val fmt = DateTimeFormatter.ofPattern("d MMMM yyyy, EEEE", RU)
         val user = buildString {
-            appendLine("Сегодняшняя тренировка (${log.date.format(fmt)}), круговая — упражнения идут по кругу:")
+            appendLine("Сегодняшняя тренировка (${log.date.format(fmt)}):")
             appendLine(log.toText())
+            appendLine()
+            appendLine("План по кругам и выполнение:")
+            appendLine(planText(log))
             if (previous != null) {
                 appendLine()
                 appendLine("Прошлая похожая тренировка (${previous.date.format(fmt)}):")
@@ -224,14 +249,42 @@ $calendar
             }
         }
         val system = """
-Ты — дружелюбный персональный тренер. Пользователь тренируется круговым методом: проходит все упражнения подряд,
-потом второй круг и т.д. Формат записи: «Упражнение 75кг на 15 (комментарий)».
+Ты — дружелюбный персональный тренер.
+$TRAINER_RULES
+
 Напиши КРАТКИЙ отчёт на русском: 3–6 коротких предложений. Отметь, что получилось, как падают повторения от круга к кругу,
-сравни с прошлой тренировкой (если есть) — где прогресс в весе или повторениях. Учти комментарии пользователя
-(боль, техника, «надо больше»). Дай 1–2 конкретных совета на следующую тренировку (например, где поднять вес).
+сравни с прошлой тренировкой (если есть) — где прогресс в весе или повторениях. Учти комментарии пользователя.
+Дай 1–2 конкретных совета на следующую тренировку (где поднять вес, где остаться).
 Пиши обычным текстом, без markdown и заголовков. Можно 1–2 эмодзи.
 """.trim()
         return complete(system, user, maxTokens = 800)
+    }
+
+    /** Ответ тренера в чате по конкретной тренировке. */
+    suspend fun trainerChat(log: WorkoutLog, history: List<Pair<String, String>>): String {
+        val fmt = DateTimeFormatter.ofPattern("d MMMM yyyy, EEEE", RU)
+        val recent = Store.logs.filter { it.id != log.id }.sortedByDescending { it.finishedAt }.take(3)
+        val system = buildString {
+            appendLine("Ты — опытный персональный тренер, общаешься с подопечным в чате. Отвечай по-русски, по делу, коротко (до 6–8 предложений), без markdown.")
+            appendLine("Если подопечный поправляет тебя — признай ошибку просто и спокойно и исправь вывод.")
+            appendLine(TRAINER_RULES)
+            appendLine()
+            appendLine("Обсуждаемая тренировка (${log.date.format(fmt)}):")
+            appendLine(log.toText())
+            appendLine()
+            appendLine("План по кругам:")
+            appendLine(planText(log))
+            log.report?.let { appendLine(); appendLine("Твой отчёт по ней:"); appendLine(it) }
+            appendLine()
+            appendLine("Текущая программа:")
+            appendLine(com.ritm.app.data.programToText(Store.program))
+            if (recent.isNotEmpty()) {
+                appendLine()
+                appendLine("Другие последние тренировки:")
+                recent.forEach { appendLine(); appendLine(it.toText()) }
+            }
+        }
+        return completeChat(system, history, maxTokens = 1000)
     }
 
     // ---------------- Составление программы ----------------
