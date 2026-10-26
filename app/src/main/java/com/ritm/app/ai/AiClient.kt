@@ -5,6 +5,7 @@ import com.ritm.app.data.ExerciseLog
 import com.ritm.app.data.Store
 import com.ritm.app.data.WorkoutLog
 import com.ritm.app.data.toText
+import com.ritm.app.data.maintenanceKcal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -297,6 +298,62 @@ ${if (myFoods.isNotEmpty()) "\nЛичный справочник пользов�
             )
         }
         return FoodResult(o.optString("title").trim().ifBlank { "Еда" }, items)
+    }
+
+    // ---------------- Норма КБЖУ ----------------
+
+    data class NutritionPlan(val kcal: Int, val protein: Int, val fat: Int, val carbs: Int, val comment: String)
+
+    suspend fun nutritionPlan(): NutritionPlan {
+        val s = Store.settings
+        val goal = when (s.dietGoal) {
+            "cut" -> "похудение (сжечь жир)"
+            "maintain" -> "поддержание формы"
+            "bulk" -> "набор мышечной массы"
+            else -> "рекомпозиция — сжигать жир и растить мышцы одновременно"
+        }
+        val activity = when (s.activity) {
+            "low" -> "сидячий образ жизни, 0–1 тренировка в неделю"
+            "medium" -> "2–3 тренировки в неделю"
+            "high" -> "4–6 силовых тренировок в неделю"
+            else -> "ежедневные тяжёлые тренировки + активная работа"
+        }
+        val weights = Store.checks.filter { it.weight != null }.sortedBy { it.date }.takeLast(6)
+        val trend = if (weights.size >= 2) weights.joinToString(", ") { "${it.date}: ${num(it.weight ?: 0.0)} кг" } else ""
+        val workoutsPerWeek = (1..7).count { Store.program[it].orEmpty().isNotEmpty() }
+        val recentFood = Store.food.filter { it.hasNutrition && !it.date.isBefore(LocalDate.now().minusDays(7)) }
+        val avgKcal = recentFood.groupBy { it.date }.values.map { d -> d.sumOf { it.kcal } }.let { if (it.isEmpty()) 0.0 else it.average() }
+        val user = buildString {
+            appendLine("Пол: ${if (s.sex == "f") "женский" else "мужской"}, возраст ${s.age}, рост ${s.heightCm} см, вес ${num(s.weightKg)} кг.")
+            appendLine("Активность: $activity. По программе тренировок дней в неделю: $workoutsPerWeek (силовые, круговые).")
+            appendLine("Цель: $goal.")
+            appendLine("Расход по формуле Миффлина–Сан Жеора с коэффициентом активности ≈ ${maintenanceKcal(s)} ккал.")
+            if (trend.isNotEmpty()) appendLine("Динамика веса: $trend.")
+            if (avgKcal > 0) appendLine("Последние 7 дней в среднем съедено ≈ ${avgKcal.toInt()} ккал (по фото).")
+            if (s.nutritionNote.isNotBlank()) appendLine("Пожелания и особенности: ${s.nutritionNote}")
+        }
+        val system = """
+Ты — спортивный нутрициолог. Рассчитай дневную норму калорий и БЖУ под цель пользователя.
+Ориентиры: похудение — дефицит 15–20% от расхода; рекомпозиция — дефицит 5–15% и высокий белок;
+поддержание — расход; набор — профицит 5–10%. Белок при силовых 1,8–2,2 г/кг (на дефиците — ближе к верхней границе),
+жиры 0,8–1 г/кг, остальное — углеводы. Если вес по динамике падает слишком быстро (>1% в неделю) или стоит — скорректируй.
+Калории ДОЛЖНЫ равняться 4·Б + 9·Ж + 4·У.
+Ответь ТОЛЬКО JSON без markdown:
+{"kcal": 2450, "protein": 175, "fat": 75, "carbs": 266, "comment": "2–4 предложения: расход, какой дефицит/профицит и почему, как корректировать"}
+""".trim()
+        val raw = complete(system, user, maxTokens = 800)
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) throw AiException("ИИ не смог посчитать норму. Попробуй ещё раз.")
+        val o = try {
+            JSONObject(raw.substring(start, end + 1))
+        } catch (e: JSONException) {
+            throw AiException("ИИ вернул некорректный ответ. Попробуй ещё раз.")
+        }
+        val p = firstDouble(o.opt("protein")).toInt().coerceIn(30, 400)
+        val f = firstDouble(o.opt("fat")).toInt().coerceIn(20, 250)
+        val c = firstDouble(o.opt("carbs")).toInt().coerceIn(0, 800)
+        return NutritionPlan(com.ritm.app.data.macroKcal(p, f, c), p, f, c, o.optString("comment").trim())
     }
 
     // ---------------- Планировщик ----------------

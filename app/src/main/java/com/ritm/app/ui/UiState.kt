@@ -40,6 +40,10 @@ object UiState {
     var plannerLoading by mutableStateOf(false)
     var plannerError by mutableStateOf<String?>(null)
 
+    var nutritionLoading by mutableStateOf(false)
+    var nutritionError by mutableStateOf<String?>(null)
+    var nutritionComment by mutableStateOf<String?>(null)
+
     var programAiOpen by mutableStateOf(false)
     var programResult by mutableStateOf<AiClient.ProgramResult?>(null)
     var programLoading by mutableStateOf(false)

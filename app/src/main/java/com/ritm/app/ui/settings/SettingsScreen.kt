@@ -15,6 +15,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.ui.graphics.Color
 import com.ritm.app.ui.UiState
 import com.ritm.app.update.UpdateSection
@@ -101,6 +104,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var s by remember { mutableStateOf(Store.settings) }
+    // настройки могли поменяться извне (ИИ посчитал норму) — подтягиваем
+    LaunchedEffect(Store.settings) { s = Store.settings }
     var showKey by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
@@ -291,20 +296,9 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             // ---------- Питание ----------
-            SectionTitle("Норма питания в день")
+            SectionTitle("Питание: цель и норма КБЖУ")
             SoftCard {
-                Text(
-                    "С этими цифрами сравнивается итог дня во вкладке «Питание».",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant
-                )
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GoalField("Ккал", s.kcalGoal, Modifier.weight(1.2f)) { commit(s.copy(kcalGoal = it)) }
-                    GoalField("Белки", s.proteinGoal, Modifier.weight(1f)) { commit(s.copy(proteinGoal = it)) }
-                    GoalField("Жиры", s.fatGoal, Modifier.weight(1f)) { commit(s.copy(fatGoal = it)) }
-                    GoalField("Угл.", s.carbsGoal, Modifier.weight(1f)) { commit(s.copy(carbsGoal = it)) }
-                }
+                NutritionSection(s) { commit(it) }
             }
 
             // ---------- Мои продукты ----------
@@ -628,9 +622,160 @@ private fun MyFoodDialog(initial: com.ritm.app.data.MyFood?, onClose: () -> Unit
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun NutritionSection(s: AppSettings, commit: (AppSettings) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val loading = UiState.nutritionLoading
+    val lastWeight = Store.checks.filter { it.weight != null }.maxByOrNull { it.date }?.weight
+
+    Text("Цель", style = MaterialTheme.typography.labelLarge, color = cs.primary)
+    Spacer(Modifier.height(6.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("cut" to "🔥 Похудение", "recomp" to "⚖️ Рекомпозиция", "maintain" to "🟰 Поддержание", "bulk" to "💪 Набор")
+            .forEach { (k, label) -> Pill(label, s.dietGoal == k) { commit(s.copy(dietGoal = k)) } }
+    }
+    Spacer(Modifier.height(12.dp))
+    Text("Обо мне", style = MaterialTheme.typography.labelLarge, color = cs.primary)
+    Spacer(Modifier.height(6.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Pill("Муж", s.sex == "m") { commit(s.copy(sex = "m")) }
+        Pill("Жен", s.sex == "f") { commit(s.copy(sex = "f")) }
+    }
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        GoalField("Возраст", s.age, Modifier.weight(1f)) { if (it in 10..100) commit(s.copy(age = it)) }
+        GoalField("Рост, см", s.heightCm, Modifier.weight(1f)) { if (it in 100..250) commit(s.copy(heightCm = it)) }
+        DecimalField("Вес, кг", s.weightKg, Modifier.weight(1f)) { commit(s.copy(weightKg = it)) }
+    }
+    if (lastWeight != null && Math.abs(lastWeight - s.weightKg) > 0.05) {
+        TextButton(onClick = { commit(s.copy(weightKg = lastWeight)) }) {
+            Text("Взять вес из «Прогресса»: ${fmtW(lastWeight)} кг", style = MaterialTheme.typography.labelMedium)
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    Text("Активность", style = MaterialTheme.typography.labelLarge, color = cs.primary)
+    Spacer(Modifier.height(6.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(
+            "low" to "Сидячая",
+            "medium" to "2–3 трен./нед",
+            "high" to "4–6 трен./нед",
+            "very_high" to "Каждый день + работа",
+        ).forEach { (k, label) -> Pill(label, s.activity == k) { commit(s.copy(activity = k)) } }
+    }
+    Spacer(Modifier.height(10.dp))
+    OutlinedTextField(
+        value = s.nutritionNote,
+        onValueChange = { commit(s.copy(nutritionNote = it)) },
+        label = { Text("Пожелания (необязательно)") },
+        placeholder = { Text("Например: много жира, хочу −0,5 кг в неделю") },
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+    )
+    Spacer(Modifier.height(10.dp))
+    Button(
+        onClick = { com.ritm.app.ai.AiJobs.startNutrition() },
+        enabled = !loading,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(50.dp),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = cs.onPrimary)
+        else Icon(Icons.Rounded.AutoAwesome, null)
+        Spacer(Modifier.width(8.dp))
+        Text(if (loading) "Считаю…" else "Рассчитать норму с ИИ")
+    }
+    Text(
+        "Расход по формуле: ≈ ${com.ritm.app.data.maintenanceKcal(s)} ккал в день",
+        style = MaterialTheme.typography.labelSmall,
+        color = cs.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp)
+    )
+    UiState.nutritionError?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = cs.error, modifier = Modifier.padding(top = 4.dp))
+    }
+
+    HorizontalDivider(Modifier.padding(vertical = 12.dp), color = cs.outlineVariant)
+    Text("Норма в день", style = MaterialTheme.typography.labelLarge, color = cs.primary)
+    Text(
+        "Меняешь Б, Ж или У — калории пересчитываются сами (4·Б + 9·Ж + 4·У). Меняешь калории — подстраиваются углеводы.",
+        style = MaterialTheme.typography.labelSmall,
+        color = cs.onSurfaceVariant
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        GoalField("Ккал", s.kcalGoal, Modifier.weight(1.2f)) { k ->
+            // калории задали вручную — добираем/убираем углеводами
+            val base = s.proteinGoal * 4 + s.fatGoal * 9
+            if (k < base) return@GoalField
+            val carbs = Math.round((k - base) / 4.0).toInt()
+            commit(s.copy(carbsGoal = carbs, kcalGoal = com.ritm.app.data.macroKcal(s.proteinGoal, s.fatGoal, carbs)))
+        }
+        GoalField("Белки", s.proteinGoal, Modifier.weight(1f)) {
+            commit(s.copy(proteinGoal = it, kcalGoal = com.ritm.app.data.macroKcal(it, s.fatGoal, s.carbsGoal)))
+        }
+        GoalField("Жиры", s.fatGoal, Modifier.weight(1f)) {
+            commit(s.copy(fatGoal = it, kcalGoal = com.ritm.app.data.macroKcal(s.proteinGoal, it, s.carbsGoal)))
+        }
+        GoalField("Угл.", s.carbsGoal, Modifier.weight(1f)) {
+            commit(s.copy(carbsGoal = it, kcalGoal = com.ritm.app.data.macroKcal(s.proteinGoal, s.fatGoal, it)))
+        }
+    }
+    if (s.weightKg > 0) {
+        Text(
+            "Белок ${fmtW(s.proteinGoal / s.weightKg)} г/кг · жиры ${fmtW(s.fatGoal / s.weightKg)} г/кг · " +
+                "${if (s.kcalGoal < com.ritm.app.data.maintenanceKcal(s)) "дефицит" else "профицит"} " +
+                "${Math.abs(s.kcalGoal - com.ritm.app.data.maintenanceKcal(s))} ккал",
+            style = MaterialTheme.typography.labelSmall,
+            color = cs.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+    }
+    UiState.nutritionComment?.let { c ->
+        Spacer(Modifier.height(8.dp))
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(cs.primaryContainer)
+                .padding(12.dp)
+        ) {
+            Text("💬 Комментарий ИИ", style = MaterialTheme.typography.labelLarge, color = cs.onPrimaryContainer)
+            Spacer(Modifier.height(4.dp))
+            Text(c, style = MaterialTheme.typography.bodySmall, color = cs.onPrimaryContainer)
+        }
+    }
+}
+
+private fun fmtW(d: Double): String = (Math.round(d * 10) / 10.0).toString().removeSuffix(".0")
+
+@Composable
+private fun DecimalField(label: String, value: Double, modifier: Modifier, onValue: (Double) -> Unit) {
+    var text by remember(label) { mutableStateOf(fmtW(value)) }
+    var focused by remember { mutableStateOf(false) }
+    if (!focused && Math.abs((text.toDoubleOrNull() ?: -1.0) - value) > 0.05) text = fmtW(value)
+    OutlinedTextField(
+        value = text,
+        onValueChange = { v ->
+            text = v.replace(',', '.').filter { it.isDigit() || it == '.' }.take(5)
+            text.toDoubleOrNull()?.takeIf { it in 30.0..300.0 }?.let(onValue)
+        },
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = modifier.onFocusChanged { focused = it.isFocused },
+        shape = RoundedCornerShape(14.dp),
+    )
+}
+
 @Composable
 private fun GoalField(label: String, value: Int, modifier: Modifier, onValue: (Int) -> Unit) {
     var text by remember(label) { mutableStateOf(value.toString()) }
+    var focused by remember { mutableStateOf(false) }
+    // значение пересчиталось снаружи (калории по БЖУ, ИИ) — показываем новое, если поле сейчас не редактируют
+    if (!focused && text.toIntOrNull() != value) text = value.toString()
     OutlinedTextField(
         value = text,
         onValueChange = { v ->
@@ -640,7 +785,7 @@ private fun GoalField(label: String, value: Int, modifier: Modifier, onValue: (I
         label = { Text(label) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = modifier,
+        modifier = modifier.onFocusChanged { focused = it.isFocused },
         shape = RoundedCornerShape(14.dp),
     )
 }

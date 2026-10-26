@@ -95,6 +95,7 @@ object AiJobs {
                 key.startsWith("chat:") && id != null -> Store.answerChat(id)
                 key == "planner" -> prefs().getString("plannerRequest", null)?.let { startPlanner(it) }
                 key == "program" -> prefs().getString("programRequest", null)?.let { startProgram(it) }
+                key == "nutrition" -> startNutrition()
             }
         }
     }
@@ -132,6 +133,29 @@ object AiJobs {
         prefs().edit().putString("plannerItems", arr.toString()).apply()
     }
 
+    // ---------------- Норма КБЖУ ----------------
+
+    fun startNutrition() {
+        UiState.nutritionLoading = true
+        UiState.nutritionError = null
+        run("nutrition") {
+            try {
+                val r = AiClient.nutritionPlan()
+                Store.updateSettings(
+                    Store.settings.copy(
+                        kcalGoal = r.kcal, proteinGoal = r.protein, fatGoal = r.fat, carbsGoal = r.carbs,
+                    )
+                )
+                UiState.nutritionComment = r.comment
+                prefs().edit().putString("nutritionComment", r.comment).apply()
+            } catch (e: Exception) {
+                UiState.nutritionError = e.message ?: "Ошибка"
+            } finally {
+                UiState.nutritionLoading = false
+            }
+        }
+    }
+
     // ---------------- Программа ----------------
 
     fun startProgram(request: String) {
@@ -165,6 +189,7 @@ object AiJobs {
     }
 
     private fun loadResults() {
+        UiState.nutritionComment = prefs().getString("nutritionComment", null)
         try {
             prefs().getString("plannerItems", null)?.let { s ->
                 val today = LocalDate.now()

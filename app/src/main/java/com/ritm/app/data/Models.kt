@@ -132,6 +132,16 @@ data class AppSettings(
     val foodWebSearch: Boolean = true,
     val foodReminders: Boolean = true,
     val foodTimes: List<Int> = listOf(9 * 60, 14 * 60, 19 * 60),
+    /** Профиль для расчёта нормы КБЖУ. */
+    val sex: String = "m",
+    val age: Int = 21,
+    val heightCm: Int = 178,
+    val weightKg: Double = 86.0,
+    /** low | medium | high | very_high */
+    val activity: String = "high",
+    /** cut | recomp | maintain | bulk */
+    val dietGoal: String = "recomp",
+    val nutritionNote: String = "",
     val kcalGoal: Int = 2500,
     val proteinGoal: Int = 160,
     val fatGoal: Int = 75,
@@ -337,6 +347,8 @@ internal object Codec {
         .put("themeMode", s.themeMode).put("themeIndex", s.themeIndex)
         .put("foodWebSearch", s.foodWebSearch)
         .put("updateRepo", s.updateRepo).put("githubToken", s.githubToken)
+        .put("sex", s.sex).put("age", s.age).put("heightCm", s.heightCm).put("weightKg", s.weightKg)
+        .put("activity", s.activity).put("dietGoal", s.dietGoal).put("nutritionNote", s.nutritionNote)
         .put("kcalGoal", s.kcalGoal).put("proteinGoal", s.proteinGoal)
         .put("fatGoal", s.fatGoal).put("carbsGoal", s.carbsGoal)
         .put("weeklyReminder", s.weeklyReminder).put("weeklyDay", s.weeklyDay)
@@ -358,6 +370,13 @@ internal object Codec {
             foodTimes = o.optJSONArray("foodTimes")?.let { a ->
                 (0 until a.length()).map { a.optInt(it) }.filter { it in 0 until 24 * 60 }.sorted()
             } ?: d.foodTimes,
+            sex = o.optString("sex", d.sex),
+            age = o.optInt("age", d.age),
+            heightCm = o.optInt("heightCm", d.heightCm),
+            weightKg = o.optDouble("weightKg", d.weightKg).takeIf { !it.isNaN() } ?: d.weightKg,
+            activity = o.optString("activity", d.activity),
+            dietGoal = o.optString("dietGoal", d.dietGoal),
+            nutritionNote = o.optString("nutritionNote", d.nutritionNote),
             kcalGoal = o.optInt("kcalGoal", d.kcalGoal),
             proteinGoal = o.optInt("proteinGoal", d.proteinGoal),
             fatGoal = o.optInt("fatGoal", d.fatGoal),
@@ -510,3 +529,18 @@ fun programToText(program: Map<Int, List<Exercise>>): String = buildString {
         }
     }
 }.trimEnd()
+
+/** Калории из БЖУ: 4·Б + 9·Ж + 4·У. */
+fun macroKcal(protein: Int, fat: Int, carbs: Int): Int = protein * 4 + fat * 9 + carbs * 4
+
+/** Mifflin–St Jeor × коэффициент активности. */
+fun maintenanceKcal(s: AppSettings): Int {
+    val bmr = 10 * s.weightKg + 6.25 * s.heightCm - 5 * s.age + if (s.sex == "f") -161 else 5
+    val k = when (s.activity) {
+        "low" -> 1.2
+        "medium" -> 1.375
+        "high" -> 1.55
+        else -> 1.725
+    }
+    return (bmr * k).toInt()
+}
