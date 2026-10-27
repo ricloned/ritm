@@ -103,9 +103,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    var s by remember { mutableStateOf(Store.settings) }
-    // настройки могли поменяться извне (ИИ посчитал норму) — подтягиваем
-    LaunchedEffect(Store.settings) { s = Store.settings }
+    // единый источник правды — Store.settings (никаких локальных копий, иначе поля «мигают»)
+    val s = Store.settings
     var showKey by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
@@ -116,7 +115,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     }
 
     fun commit(n: AppSettings) {
-        s = n
         Store.updateSettings(n)
     }
 

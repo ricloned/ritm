@@ -432,7 +432,14 @@ private fun AiProgramPanel(onClose: () -> Unit) {
             }
         }
         if (loading) {
-            item { com.ritm.app.ui.AiProgressLine("program") }
+            item {
+                Column {
+                    UiState.programStep?.let {
+                        Text(it, style = MaterialTheme.typography.bodyMedium, color = cs.primary, fontWeight = FontWeight.Medium)
+                    }
+                    com.ritm.app.ui.AiProgressLine("program")
+                }
+            }
         }
         if (error != null) {
             item {

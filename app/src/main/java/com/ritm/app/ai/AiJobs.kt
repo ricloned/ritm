@@ -194,13 +194,14 @@ object AiJobs {
         UiState.aiStartedAt = UiState.aiStartedAt + ("program" to System.currentTimeMillis())
         run("program") {
             try {
-                val r = AiClient.buildProgram(request, Store.program)
+                val r = AiClient.buildProgram(request, Store.program) { UiState.programStep = it }
                 UiState.programResult = r
                 saveProgramResult(r)
             } catch (e: Exception) {
                 UiState.programError = errText(e)
             } finally {
                 UiState.programLoading = false
+                UiState.programStep = null
             }
         }
     }

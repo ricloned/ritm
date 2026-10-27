@@ -155,7 +155,7 @@ object AiClient {
         try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 30_000
-            conn.readTimeout = 90_000 // тишина между кусками потока
+            conn.readTimeout = 60_000 // тишина между кусками потока
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("Accept", "text/event-stream, application/json")
@@ -187,7 +187,12 @@ object AiClient {
                     return parseFull(JSONObject(reader.readText()), anthropic)
                 }
                 while (true) {
-                    val line = reader.readLine() ?: break
+                    // если текст уже пришёл, а сервер просто молчит и не закрывает соединение — считаем ответ готовым
+                    val line = try {
+                        reader.readLine()
+                    } catch (e: java.net.SocketTimeoutException) {
+                        if (out.isNotBlank()) null else throw e
+                    } ?: break
                     if (System.currentTimeMillis() - started > MAX_ANSWER_MS) {
                         throw AiException(
                             "ИИ не ответил за 4 минуты — запрос остановлен. Попробуй ещё раз; " +
@@ -220,11 +225,22 @@ object AiClient {
                                 val d = ev.optJSONObject("delta")
                                 if (d?.optString("type") == "text_delta") out.append(d.optString("text"))
                             }
+                            // конец ответа — не ждём, пока сервер закроет соединение
+                            "message_stop" -> break
+                            "message_delta" -> {
+                                val stop = ev.optJSONObject("delta")?.let { if (it.isNull("stop_reason")) "" else it.optString("stop_reason") }
+                                if (!stop.isNullOrBlank()) break
+                            }
                             "error" -> throw RetryableAi("Сервис ИИ перегружен, повторяю…")
                         }
                     } else {
-                        val delta = ev.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("delta")
+                        val choice = ev.optJSONArray("choices")?.optJSONObject(0)
+                        val delta = choice?.optJSONObject("delta")
                         if (delta != null && !delta.isNull("content")) out.append(delta.optString("content"))
+                        // модель закончила — выходим сразу
+                        if (choice != null && !choice.isNull("finish_reason") &&
+                            choice.optString("finish_reason").isNotBlank()
+                        ) break
                     }
                 }
             }
@@ -639,7 +655,11 @@ $TRAINER_RULES
         return m.value.replace(',', '.').toDoubleOrNull() ?: 0.0
     }
 
-    suspend fun buildProgram(request: String, current: Map<Int, List<Exercise>>): ProgramResult {
+    suspend fun buildProgram(
+        request: String,
+        current: Map<Int, List<Exercise>>,
+        onProgress: (String) -> Unit = {},
+    ): ProgramResult {
         val currentText = (1..7).joinToString("\n") { d ->
             val list = current[d].orEmpty()
             val name = java.time.DayOfWeek.of(d).getDisplayName(TextStyle.FULL, RU)
@@ -660,16 +680,12 @@ $TRAINER_RULES
 Текущая программа пользователя (может быть пустой):
 $currentText
 
-Ответь СТРОГО в коротком формате, без markdown и без лишнего текста (так ответ приходит в разы быстрее):
-D1: Название;круги;повторы;вес | Название;круги;повторы;вес | ...
-D2: ...
-...
-D7: ...
-C: комментарий 2–4 предложения — логика программы и правило прогрессии
-
+Программу составляем ПО ОДНОМУ ДНЮ за запрос (так ответ короткий и не обрывается).
+Формат строки дня, без markdown и без лишнего текста:
+D<номер>: Название;круги;повторы;вес | Название;круги;повторы;вес | ...
 D1 = понедельник … D7 = воскресенье. Порядок упражнений в строке = порядок в круге.
 Вес — число в кг (0, если без веса). Повторы — одно число (для кардио и растяжки — минуты).
-День отдыха: «D3: -». Если день полностью повторяет другой, можно написать «D5: =D1».
+День отдыха: «D3: -». Если день полностью повторяет уже составленный, напиши «D5: =D1».
 Пример: «D1: Жим гантелей лёжа;4;8;25 | Подъём гантелей на бицепс;3;10;15 | Кардио на дорожке;1;10;0»
 Названия упражнений на русском.
 """.trim()
@@ -698,8 +714,58 @@ D1 = понедельник … D7 = воскресенье. Порядок уп
                 recent.forEach { appendLine(); appendLine(it.toText()) }
             }
         }
-        val raw = complete(system, fullRequest, maxTokens = 2500)
-        return parseCompactProgram(raw) ?: parseJsonProgram(raw)
+        // 1) обычно — одним коротким запросом на всю неделю
+        onProgress("Составляю программу на неделю")
+        try {
+            val raw = complete(
+                system,
+                fullRequest + "\n\nНапиши сразу все 7 строк D1…D7, затем строку «C: комментарий» (2–4 предложения: логика и правило прогрессии).",
+                maxTokens = 2000,
+            )
+            parseCompactProgram(raw)?.let { r ->
+                if (r.days.values.count { it.isNotEmpty() } >= 2) return r
+            }
+        } catch (e: AiException) {
+            // не вышло одним куском — составим по дням
+        }
+
+        // 2) запасной путь — по одному дню, каждый ответ короткий
+        val done = StringBuilder()
+        val dayNames = listOf("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
+        for (d in 1..7) {
+            onProgress("Составляю ${dayNames[d - 1]} · $d из 7")
+            val ask = buildString {
+                append(fullRequest)
+                appendLine()
+                appendLine()
+                if (done.isNotEmpty()) {
+                    appendLine("Уже составлено:")
+                    appendLine(done.toString().trim())
+                    appendLine()
+                }
+                appendLine("СЕЙЧАС напиши ТОЛЬКО одну строку для D$d (${dayNames[d - 1]}) — и больше ничего.")
+            }
+            val raw = complete(system, ask, maxTokens = 700)
+            val line = raw.lines().map { it.trim().trim('*', '`') }.firstOrNull { Regex("""^D\s*$d\s*[:：]""", RegexOption.IGNORE_CASE).containsMatchIn(it) }
+                ?: raw.lines().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.let { "D$d: $it" }
+                ?: "D$d: -"
+            done.appendLine(line)
+        }
+        onProgress("Пишу комментарий тренера")
+        val comment = try {
+            complete(
+                "Ты — персональный тренер. Отвечай по-русски обычным текстом без markdown.",
+                "Вот программа на неделю (формат: упражнение;круги;повторы;вес):\n$done\n\n" +
+                    "Пожелания пользователя были такие:\n$request\n\n" +
+                    "Напиши 2–4 предложения: логика программы и правило прогрессии весов.",
+                maxTokens = 400,
+                fast = true,
+            ).trim()
+        } catch (e: AiException) {
+            ""
+        }
+        return parseCompactProgram(done.toString() + "\nC: " + comment.replace("\n", " "))
+            ?: throw AiException("ИИ не смог составить программу. Попробуй ещё раз.")
     }
 
     /** Разбор формата «D1: Название;круги;повторы;вес | …», «D5: =D1», «C: комментарий». */

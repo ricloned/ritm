@@ -50,6 +50,7 @@ object UiState {
     var programAiOpen by mutableStateOf(false)
     var programResult by mutableStateOf<AiClient.ProgramResult?>(null)
     var programLoading by mutableStateOf(false)
+    var programStep by mutableStateOf<String?>(null)
     var programError by mutableStateOf<String?>(null)
 
     /** Прогресс: редактор замера, сравнение, просмотр. */
