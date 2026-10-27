@@ -181,25 +181,39 @@ fun TodayTab(onOpenProgram: () -> Unit) {
         }
 
         item(key = "roundButtons") {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilledTonalButton(
-                    onClick = { Store.addRound(today, mainExercises) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Круг")
+            val delta = Store.roundDelta(today)
+            Column {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick = { Store.removeRound(today, mainExercises) },
+                        enabled = mainRounds > 1,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Rounded.Remove, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Круг")
+                    }
+                    FilledTonalButton(
+                        onClick = { Store.addRound(today, mainExercises) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Круг")
+                    }
                 }
-                OutlinedButton(
-                    onClick = { Store.removeRound(today, mainExercises) },
-                    enabled = rounds > 1,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(Icons.Rounded.Remove, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Убрать круг")
+                if (delta != 0) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            (if (delta > 0) "+$delta" else "$delta") + " к плану у каждого упражнения",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { Store.resetRounds(today) }) { Text("Как по плану") }
+                    }
                 }
             }
         }

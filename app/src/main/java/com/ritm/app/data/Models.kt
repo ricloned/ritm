@@ -54,6 +54,8 @@ data class ChatMsg(val role: String, val text: String)
 data class WorkoutDraft(
     val date: LocalDate,
     val sets: Map<Long, List<SetEntry>>,
+    /** Сколько кругов добавлено (+) или убрано (−) относительно плана — одинаково для всех упражнений. */
+    val roundDelta: Int = 0,
 )
 
 /** Продукт в приёме пищи. Граммы — как указал пользователь (крупы/макароны — в сухом виде). */
@@ -430,7 +432,7 @@ internal object Codec {
     fun draftToJson(d: WorkoutDraft): JSONObject {
         val sets = JSONObject()
         d.sets.forEach { (id, list) -> sets.put(id.toString(), list.toJsonArray(::setToJson)) }
-        return JSONObject().put("date", d.date.toString()).put("sets", sets)
+        return JSONObject().put("date", d.date.toString()).put("sets", sets).put("roundDelta", d.roundDelta)
     }
 
     fun draftFromJson(o: JSONObject?): WorkoutDraft? {
@@ -442,7 +444,7 @@ internal object Codec {
                 val id = k.toLongOrNull() ?: return@forEach
                 map[id] = setsObj.optJSONArray(k).mapObjects(::setFromJson)
             }
-            WorkoutDraft(LocalDate.parse(o.getString("date")), map)
+            WorkoutDraft(LocalDate.parse(o.getString("date")), map, o.optInt("roundDelta", 0))
         } catch (_: Exception) {
             null
         }

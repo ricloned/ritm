@@ -224,9 +224,29 @@ object Store {
 
     fun nextDayNumber(): Int = (logs.maxOfOrNull { it.dayNumber } ?: 0) + 1
 
-    fun setsFor(date: LocalDate, ex: Exercise): List<SetEntry> =
-        draft?.takeIf { it.date == date }?.sets?.get(ex.id)
-            ?: List(ex.sets.coerceAtLeast(1)) { SetEntry() }
+    private fun draftFor(date: LocalDate): WorkoutDraft? = draft?.takeIf { it.date == date }
+
+    fun roundDelta(date: LocalDate): Int = draftFor(date)?.roundDelta ?: 0
+
+    /** Упражнение «на 1 круг» (кардио, растяжка) в дне, где у остальных больше кругов. */
+    private fun isFinisherEx(ex: Exercise): Boolean {
+        val day = program.values.firstOrNull { list -> list.any { it.id == ex.id } } ?: return false
+        return isFinisher(ex.sets, day.maxOfOrNull { it.sets } ?: 0)
+    }
+
+    /** Кругов у упражнения сегодня: план ± общая поправка (финиш не трогаем). */
+    fun roundsFor(date: LocalDate, ex: Exercise): Int =
+        if (isFinisherEx(ex)) ex.sets.coerceAtLeast(1)
+        else (ex.sets + roundDelta(date)).coerceAtLeast(1)
+
+    private fun rawSets(date: LocalDate, ex: Exercise): List<SetEntry> =
+        draftFor(date)?.sets?.get(ex.id) ?: emptyList()
+
+    /** Подходы по кругам. Введённое сохраняется, даже если круг временно убрали. */
+    fun setsFor(date: LocalDate, ex: Exercise): List<SetEntry> {
+        val raw = rawSets(date, ex)
+        return List(roundsFor(date, ex)) { raw.getOrNull(it) ?: SetEntry() }
+    }
 
     /** Подсказка для круга: что было в прошлый раз в этом упражнении, иначе цель из программы. */
     fun hint(ex: Exercise, round: Int): Pair<String, String> {
@@ -241,49 +261,73 @@ object Store {
     }
 
     private fun putSets(date: LocalDate, ex: Exercise, list: List<SetEntry>) {
-        val cur = draft?.takeIf { it.date == date } ?: WorkoutDraft(date, emptyMap())
+        val cur = draftFor(date) ?: WorkoutDraft(date, emptyMap())
         draft = cur.copy(sets = cur.sets + (ex.id to list))
         save()
     }
 
+    private fun paddedRaw(date: LocalDate, ex: Exercise, minSize: Int): MutableList<SetEntry> {
+        val list = rawSets(date, ex).toMutableList()
+        while (list.size < minSize) list.add(SetEntry())
+        return list
+    }
+
     fun updateSet(date: LocalDate, ex: Exercise, index: Int, entry: SetEntry) {
-        val list = setsFor(date, ex).toMutableList()
-        while (list.size <= index) list.add(SetEntry())
+        val list = paddedRaw(date, ex, index + 1)
         list[index] = entry
         putSets(date, ex, list.toList())
     }
 
     /** Вес переносится на следующие круги, если там пусто или стоял прежний вес. */
     fun setWeight(date: LocalDate, ex: Exercise, index: Int, weight: String) {
-        val list = setsFor(date, ex).toMutableList()
-        while (list.size <= index) list.add(SetEntry())
+        val count = roundsFor(date, ex)
+        val list = paddedRaw(date, ex, maxOf(index + 1, count))
         val old = list[index].weight
         list[index] = list[index].copy(weight = weight)
-        for (j in index + 1 until list.size) {
+        for (j in index + 1 until count) {
             if (list[j].weight.isBlank() || list[j].weight == old) list[j] = list[j].copy(weight = weight)
         }
         putSets(date, ex, list.toList())
     }
 
+    /** +1 круг всем упражнениям. Всегда обратимо кнопкой «− Круг». */
     fun addRound(date: LocalDate, exercises: List<Exercise>) {
-        val rounds = exercises.maxOfOrNull { setsFor(date, it).size } ?: 0
+        if (exercises.isEmpty()) return
+        val cur = draftFor(date) ?: WorkoutDraft(date, emptyMap())
+        if (cur.roundDelta >= 5) return
+        // вес нового круга = вес последнего заполненного
+        val next = cur.roundDelta + 1
+        var sets = cur.sets
         exercises.forEach { ex ->
-            val list = setsFor(date, ex).toMutableList()
-            if (list.size == rounds) {
-                val last = list.lastOrNull()
-                list.add(SetEntry(weight = last?.weight ?: ""))
-                putSets(date, ex, list.toList())
+            if (isFinisherEx(ex)) return@forEach
+            val newCount = (ex.sets + next).coerceAtLeast(1)
+            val raw = (sets[ex.id] ?: emptyList()).toMutableList()
+            while (raw.size < newCount) raw.add(SetEntry())
+            val idx = newCount - 1
+            if (raw[idx].weight.isBlank()) {
+                val prevW = raw.take(idx).lastOrNull { it.weight.isNotBlank() }?.weight
+                if (prevW != null) raw[idx] = raw[idx].copy(weight = prevW)
             }
+            sets = sets + (ex.id to raw.toList())
         }
+        draft = cur.copy(sets = sets, roundDelta = next)
+        save()
     }
 
+    /** −1 круг всем упражнениям (у кого больше одного). Введённые цифры не теряются. */
     fun removeRound(date: LocalDate, exercises: List<Exercise>) {
-        val rounds = exercises.maxOfOrNull { setsFor(date, it).size } ?: 0
-        if (rounds <= 1) return
-        exercises.forEach { ex ->
-            val list = setsFor(date, ex)
-            if (list.size == rounds) putSets(date, ex, list.dropLast(1))
-        }
+        if (exercises.isEmpty()) return
+        val cur = draftFor(date) ?: WorkoutDraft(date, emptyMap())
+        val maxPlan = exercises.filterNot { isFinisherEx(it) }.maxOfOrNull { it.sets } ?: return
+        if (maxPlan + cur.roundDelta <= 1) return
+        draft = cur.copy(roundDelta = cur.roundDelta - 1)
+        save()
+    }
+
+    fun resetRounds(date: LocalDate) {
+        val cur = draftFor(date) ?: return
+        draft = cur.copy(roundDelta = 0)
+        save()
     }
 
     /** Завершает тренировку. Возвращает null, если ничего не заполнено. */
