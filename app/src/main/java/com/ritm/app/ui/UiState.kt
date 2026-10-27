@@ -40,6 +40,9 @@ object UiState {
     var plannerLoading by mutableStateOf(false)
     var plannerError by mutableStateOf<String?>(null)
 
+    /** Когда стартовал запрос ИИ (для таймера на кнопке). */
+    var aiStartedAt by mutableStateOf(mapOf<String, Long>())
+
     var nutritionLoading by mutableStateOf(false)
     var nutritionError by mutableStateOf<String?>(null)
     var nutritionComment by mutableStateOf<String?>(null)

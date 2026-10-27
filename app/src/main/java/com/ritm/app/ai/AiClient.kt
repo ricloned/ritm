@@ -8,6 +8,7 @@ import com.ritm.app.data.toText
 import com.ritm.app.data.maintenanceKcal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -37,8 +38,8 @@ object AiClient {
 
     private val RU: Locale = Locale.forLanguageTag("ru-RU")
 
-    suspend fun complete(system: String, user: String, maxTokens: Int = 2000): String =
-        completeChat(system, listOf("user" to user), maxTokens)
+    suspend fun complete(system: String, user: String, maxTokens: Int = 2000, fast: Boolean = false): String =
+        completeChat(system, listOf("user" to user), maxTokens, fast = fast)
 
     /** Диалог: список пар (role = "user" | "assistant", текст). */
     suspend fun completeChat(
@@ -47,10 +48,13 @@ object AiClient {
         maxTokens: Int = 2000,
         extraUserContent: JSONArray? = null,
         webSearch: Boolean = false,
+        /** Использовать «быструю модель» из настроек, если она задана. */
+        fast: Boolean = false,
     ): String = withContext(Dispatchers.IO) {
         val s = Store.settings
         if (s.apiKey.isBlank()) throw AiException("Добавь API-ключ в настройках (шестерёнка сверху)")
         if (s.model.isBlank()) throw AiException("Укажи модель в настройках")
+        val model = if (fast && s.fastModel.isNotBlank()) s.fastModel.trim() else s.model.trim()
         val base = s.baseUrl.trim().trimEnd('/')
         if (base.isEmpty()) throw AiException("Укажи адрес API в настройках")
 
@@ -69,7 +73,7 @@ object AiClient {
         extraUserContent?.let { content -> msgArray.put(JSONObject().put("role", "user").put("content", content)) }
         val body = if (anthropic) {
             JSONObject()
-                .put("model", s.model.trim())
+                .put("model", model)
                 .put("max_tokens", maxTokens)
                 .put("system", system)
                 .put("messages", msgArray)
@@ -82,7 +86,7 @@ object AiClient {
                 }
         } else {
             JSONObject()
-                .put("model", s.model.trim())
+                .put("model", model)
                 .put("temperature", 0.4)
                 .put("messages", msgArray)
                 .also {
@@ -99,7 +103,9 @@ object AiClient {
         // До 3 попыток: при перегрузке/таймауте шлюза (5xx, 429, обрыв связи) повторяем с паузой.
         var lastError: AiException? = null
         for (attempt in 0 until 3) {
+            ensureActive()
             if (attempt > 0) kotlinx.coroutines.delay(if (attempt == 1) 3_000L else 8_000L)
+            ensureActive()
             try {
                 return@withContext requestOnce(endpoint, anthropic, s, payload)
             } catch (e: RetryableAi) {
@@ -108,6 +114,20 @@ object AiClient {
         }
         throw lastError ?: AiException("Сервис ИИ не ответил")
     }
+
+    /** Открытые соединения — чтобы кнопка «Отменить» могла их оборвать. */
+    private val openConns = java.util.Collections.synchronizedSet(HashSet<HttpURLConnection>())
+
+    /** Обрывает все текущие запросы (используется при отмене). */
+    fun abortAll() {
+        val list = synchronized(openConns) { openConns.toList() }
+        list.forEach { c ->
+            Thread { try { c.disconnect() } catch (_: Exception) {} }.start()
+        }
+    }
+
+    /** Предел на один ответ: если сервис держит соединение, но не отвечает, — не ждём вечно. */
+    private const val MAX_ANSWER_MS = 4 * 60 * 1000L
 
     /** Ошибка, после которой есть смысл повторить запрос. */
     private class RetryableAi(message: String) : Exception(message)
@@ -129,10 +149,12 @@ object AiClient {
         } catch (e: Exception) {
             throw AiException("Неверный адрес API: $endpoint")
         }
+        openConns.add(conn)
+        val started = System.currentTimeMillis()
         try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 30_000
-            conn.readTimeout = 120_000 // между кусками потока
+            conn.readTimeout = 90_000 // тишина между кусками потока
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.setRequestProperty("Accept", "text/event-stream, application/json")
@@ -163,6 +185,12 @@ object AiClient {
                 }
                 while (true) {
                     val line = reader.readLine() ?: break
+                    if (System.currentTimeMillis() - started > MAX_ANSWER_MS) {
+                        throw AiException(
+                            "ИИ не ответил за 4 минуты — запрос остановлен. Попробуй ещё раз; " +
+                                "если повторится — выбери в настройках модель побыстрее (без «размышлений»)."
+                        )
+                    }
                     if (!line.startsWith("data:")) continue
                     val data = line.removePrefix("data:").trim()
                     if (data.isEmpty() || data == "[DONE]") {
@@ -211,6 +239,7 @@ object AiClient {
         } catch (e: JSONException) {
             throw AiException("Не удалось разобрать ответ сервера")
         } finally {
+            openConns.remove(conn)
             conn.disconnect()
         }
     }
@@ -289,9 +318,12 @@ object AiClient {
         photoPath: String,
         comment: String,
         myFoods: List<com.ritm.app.data.MyFood> = emptyList(),
+        webRequested: Boolean = false,
     ): FoodResult {
-        val web = Store.settings.foodWebSearch && webSearchAvailable()
-        val hasPhoto = photoPath.isNotBlank() && java.io.File(photoPath).exists()
+        val web = (webRequested || Store.settings.foodWebSearch) && webSearchAvailable()
+        // если в комментарии уже есть граммовки — фото не нужно, так в разы быстрее
+        val commentHasGrams = Regex("""\d+\s*(г|гр|грамм|мл|кг|шт)""", RegexOption.IGNORE_CASE).containsMatchIn(comment)
+        val hasPhoto = photoPath.isNotBlank() && java.io.File(photoPath).exists() && !commentHasGrams
         val text = buildString {
             append("Посчитай КБЖУ этого приёма пищи.")
             if (comment.isNotBlank()) {
@@ -343,9 +375,9 @@ ${if (myFoods.isNotEmpty()) "\nЛичный справочник пользов�
                             .put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$b64"))
                     )
                 }
-                return completeChat(system, emptyList(), maxTokens = 2500, extraUserContent = content, webSearch = web)
+                return completeChat(system, emptyList(), maxTokens = 1500, extraUserContent = content, webSearch = web, fast = true)
             }
-            return completeChat(system, listOf("user" to text), maxTokens = 2500, webSearch = web)
+            return completeChat(system, listOf("user" to text), maxTokens = 1500, webSearch = web, fast = true)
         }
 
         val raw = try {
@@ -426,7 +458,7 @@ ${if (myFoods.isNotEmpty()) "\nЛичный справочник пользов�
 Ответь ТОЛЬКО JSON без markdown:
 {"kcal": 2450, "protein": 175, "fat": 75, "carbs": 266, "comment": "2–4 предложения: расход, какой дефицит/профицит и почему, как корректировать"}
 """.trim()
-        val raw = complete(system, user, maxTokens = 800)
+        val raw = complete(system, user, maxTokens = 800, fast = true)
         val start = raw.indexOf('{')
         val end = raw.lastIndexOf('}')
         if (start < 0 || end <= start) throw AiException("ИИ не смог посчитать норму. Попробуй ещё раз.")
@@ -468,7 +500,7 @@ $calendar
 [{"title": "Позвонить Диме", "date": "YYYY-MM-DD", "time": "HH:MM"}, {"title": "...", "date": "YYYY-MM-DD", "time": null}]
 """.trim()
 
-        val raw = complete(system, userText, maxTokens = 4000)
+        val raw = complete(system, userText, maxTokens = 4000, fast = true)
         val start = raw.indexOf('[')
         val end = raw.lastIndexOf(']')
         if (start < 0 || end <= start) throw AiException("ИИ ответил не списком задач. Попробуй ещё раз.")

@@ -431,6 +431,9 @@ private fun AiProgramPanel(onClose: () -> Unit) {
                 }
             }
         }
+        if (loading) {
+            item { com.ritm.app.ui.AiProgressLine("program") }
+        }
         if (error != null) {
             item {
                 SoftCard(color = cs.errorContainer) {
@@ -438,7 +441,7 @@ private fun AiProgramPanel(onClose: () -> Unit) {
                 }
             }
         }
-        if (result != null) {
+        if (result != null && !loading) {
             if (result.comment.isNotBlank()) {
                 item {
                     ReportLike(result.comment)

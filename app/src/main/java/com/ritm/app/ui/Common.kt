@@ -265,3 +265,28 @@ fun rememberDictation(prompt: String, onText: (String) -> Unit): () -> Unit {
 
 /** Добавляет надиктованный текст к уже написанному. */
 fun appendDictated(old: String, add: String): String = if (old.isBlank()) add else old.trimEnd() + ". " + add
+
+/** Строка «Идёт уже 1:23 · Отменить» под кнопкой ИИ. */
+@Composable
+fun AiProgressLine(key: String) {
+    val started = UiState.aiStartedAt[key] ?: return
+    var now by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+    androidx.compose.runtime.LaunchedEffect(started) {
+        while (true) {
+            now = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+    val sec = ((now - started) / 1000).coerceAtLeast(0)
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "Идёт ${sec / 60}:${(sec % 60).toString().padStart(2, '0')} · можно свернуть приложение",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        androidx.compose.material3.TextButton(onClick = { com.ritm.app.ai.AiJobs.cancel(key) }) {
+            Text("Отменить", color = MaterialTheme.colorScheme.error)
+        }
+    }
+}

@@ -131,7 +131,9 @@ data class AppSettings(
     val workoutHour: Int = 18,
     val workoutMinute: Int = 0,
     /** Искать КБЖу брендовых продуктов в интернете (OpenRouter / Claude). */
-    val foodWebSearch: Boolean = true,
+    val foodWebSearch: Boolean = false,
+    /** Быстрая модель для КБЖУ, планера и нормы питания (пусто — основная). */
+    val fastModel: String = "",
     val foodReminders: Boolean = true,
     val foodTimes: List<Int> = listOf(9 * 60, 14 * 60, 19 * 60),
     /** Профиль для расчёта нормы КБЖУ. */
@@ -347,7 +349,7 @@ internal object Codec {
         .put("foodReminders", s.foodReminders)
         .put("foodTimes", JSONArray().also { a -> s.foodTimes.forEach { a.put(it) } })
         .put("themeMode", s.themeMode).put("themeIndex", s.themeIndex)
-        .put("foodWebSearch", s.foodWebSearch)
+        .put("foodWebAuto", s.foodWebSearch).put("fastModel", s.fastModel)
         .put("updateRepo", s.updateRepo).put("githubToken", s.githubToken)
         .put("sex", s.sex).put("age", s.age).put("heightCm", s.heightCm).put("weightKg", s.weightKg)
         .put("activity", s.activity).put("dietGoal", s.dietGoal).put("nutritionNote", s.nutritionNote)
@@ -387,7 +389,8 @@ internal object Codec {
             weeklyDay = o.optInt("weeklyDay", d.weeklyDay).coerceIn(1, 7),
             weeklyHour = o.optInt("weeklyHour", d.weeklyHour),
             weeklyMinute = o.optInt("weeklyMinute", d.weeklyMinute),
-            foodWebSearch = o.optBoolean("foodWebSearch", d.foodWebSearch),
+            foodWebSearch = o.optBoolean("foodWebAuto", d.foodWebSearch),
+            fastModel = o.optString("fastModel", d.fastModel),
             updateRepo = o.optString("updateRepo", d.updateRepo).ifBlank { d.updateRepo },
             githubToken = o.optString("githubToken", d.githubToken),
             themeMode = o.optString("themeMode", d.themeMode),

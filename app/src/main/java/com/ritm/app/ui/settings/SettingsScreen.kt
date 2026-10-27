@@ -201,6 +201,22 @@ fun SettingsScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
                 )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = s.fastModel,
+                    onValueChange = { commit(s.copy(fastModel = it.trim())) },
+                    label = { Text("Быстрая модель (необязательно)") },
+                    placeholder = { Text("для КБЖУ, планера и нормы питания") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                )
+                Text(
+                    "Лёгкая быстрая модель (обычно с «mini» или «flash» в названии) отвечает за пару секунд. Для программы, отчётов и чата остаётся основная.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
                 Spacer(Modifier.height(12.dp))
                 FilledTonalButton(
                     onClick = {
@@ -306,10 +322,10 @@ fun SettingsScreen(onBack: () -> Unit) {
             SoftCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Искать продукты в интернете", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                        Text("Всегда искать в интернете", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                         Text(
                             if (com.ritm.app.ai.AiClient.webSearchAvailable())
-                                "Для брендов (Теос, Савушкин…) ИИ найдёт точный состав. Запрос чуть дольше и немного дороже."
+                                "Медленно (до минуты). Лучше выключено: в приёме пищи есть кнопка «Найти в интернете» для конкретного продукта."
                             else "Работает с OpenRouter и Claude. С текущим сервисом ИИ считает по своим знаниям.",
                             style = MaterialTheme.typography.bodySmall,
                             color = cs.onSurfaceVariant
@@ -693,6 +709,7 @@ private fun NutritionSection(s: AppSettings, commit: (AppSettings) -> Unit) {
         color = cs.onSurfaceVariant,
         modifier = Modifier.padding(top = 4.dp)
     )
+    if (loading) com.ritm.app.ui.AiProgressLine("nutrition")
     UiState.nutritionError?.let {
         Text(it, style = MaterialTheme.typography.bodySmall, color = cs.error, modifier = Modifier.padding(top = 4.dp))
     }

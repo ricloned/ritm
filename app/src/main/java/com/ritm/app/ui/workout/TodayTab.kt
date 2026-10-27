@@ -156,6 +156,26 @@ fun TodayTab(onOpenProgram: () -> Unit) {
             }
         }
 
+        // живой тоннаж по уже сделанным подходам
+        val liveLogs = exercises.map { ex ->
+            val filled = Store.setsFor(today, ex).mapIndexedNotNull { i, set ->
+                if (!set.done && set.reps.isBlank()) return@mapIndexedNotNull null
+                val (hw, hr) = Store.hint(ex, i)
+                set.copy(weight = set.weight.ifBlank { if (set.done) hw else "" }, reps = set.reps.ifBlank { hr })
+            }
+            com.ritm.app.data.ExerciseLog(ex.name, ex.sets, ex.reps, ex.weight, filled)
+        }
+        val live = tonnageOf(liveLogs)
+        if (live.sets > 0) {
+            item(key = "liveTonnage") {
+                val names = exercises.map { it.name.lowercase() }.toSet()
+                val prev = Store.logs
+                    .filter { l -> l.exercises.count { it.name.lowercase() in names } >= maxOf(2, names.size / 2) }
+                    .maxByOrNull { it.finishedAt }
+                TonnageCard(live, prev?.let { tonnageOf(it.exercises) }, live = true)
+            }
+        }
+
         if (exercises.isEmpty()) {
             item(key = "rest") {
                 EmptyState(
@@ -467,6 +487,9 @@ fun LogContent(log: WorkoutLog) {
             Spacer(Modifier.width(6.dp))
             Text("Скопировать текстом", style = MaterialTheme.typography.labelMedium)
         }
+        Spacer(Modifier.height(10.dp))
+        TonnageCard(tonnageOf(log.exercises), previousSimilar(log)?.let { tonnageOf(it.exercises) })
+        Spacer(Modifier.height(10.dp))
         ReportBlock(log)
         TrainerChat(log)
     }
@@ -722,11 +745,12 @@ fun HistoryTab() {
                                     .padding(vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Rounded.CalendarMonth, null, Modifier.size(14.dp), tint = cs.onSurfaceVariant)
+                                Icon(Icons.Rounded.CalendarMonth, null, Modifier.size(20.dp), tint = cs.primary)
                                 Spacer(Modifier.width(4.dp))
                                 Text(
                                     log.date.dayTitle(),
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Medium,
                                     color = cs.onSurfaceVariant
                                 )
                             }

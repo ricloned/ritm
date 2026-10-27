@@ -37,6 +37,7 @@ object AiJobs {
     private lateinit var ctx: Context
     private var ready = false
     private val active = HashSet<String>()
+    private val jobs = HashMap<String, kotlinx.coroutines.Job>()
 
     fun init(context: Context) {
         if (ready) return
@@ -57,26 +58,51 @@ object AiJobs {
 
     /** Запускает запрос [key]. Повторный запуск того же ключа игнорируется. */
     fun run(key: String, block: suspend () -> Unit) {
-        if (!ready) return
+        if (!ready) {
+            Store.scope.launch { block() }
+            return
+        }
         synchronized(active) {
             if (key in active) return
             active.add(key)
         }
         setPending(pending() + key)
         startService()
-        Store.scope.launch {
+        val job = Store.scope.launch {
             try {
                 block()
             } finally {
-                setPending(pending() - key)
-                val empty = synchronized(active) {
-                    active.remove(key)
-                    active.isEmpty()
-                }
-                if (empty) stopService()
+                finish(key)
             }
         }
+        synchronized(active) { if (key in active) jobs[key] = job }
     }
+
+    private fun finish(key: String) {
+        setPending(pending() - key)
+        val empty = synchronized(active) {
+            active.remove(key)
+            jobs.remove(key)
+            active.isEmpty()
+        }
+        if (empty) stopService()
+    }
+
+    /** Отмена запроса: сразу освобождаем кнопку, соединение обрываем. */
+    fun cancel(key: String) {
+        val job = synchronized(active) { jobs[key] }
+        job?.cancel()
+        finish(key)
+        AiClient.abortAll()
+        when (key) {
+            "program" -> { UiState.programLoading = false; UiState.programError = null }
+            "planner" -> { UiState.plannerLoading = false; UiState.plannerError = null }
+            "nutrition" -> { UiState.nutritionLoading = false; UiState.nutritionError = null }
+        }
+    }
+
+    private fun errText(e: Exception): String? =
+        if (e is kotlinx.coroutines.CancellationException) null else (e.message ?: "Ошибка")
 
     /** При запуске приложения докручиваем запросы, которые оборвались (приложение закрыли/убили). */
     fun resume() {
@@ -107,6 +133,7 @@ object AiJobs {
         prefs().edit().putString("plannerRequest", request).apply()
         UiState.plannerLoading = true
         UiState.plannerError = null
+        UiState.aiStartedAt = UiState.aiStartedAt + ("planner" to System.currentTimeMillis())
         run("planner") {
             try {
                 val res = AiClient.parsePlan(request)
@@ -114,7 +141,7 @@ object AiJobs {
                 savePlannerItems(res)
                 if (res.isEmpty()) UiState.plannerError = "Не нашёл задач в тексте"
             } catch (e: Exception) {
-                UiState.plannerError = e.message ?: "Ошибка"
+                UiState.plannerError = errText(e)
             } finally {
                 UiState.plannerLoading = false
             }
@@ -138,6 +165,7 @@ object AiJobs {
     fun startNutrition() {
         UiState.nutritionLoading = true
         UiState.nutritionError = null
+        UiState.aiStartedAt = UiState.aiStartedAt + ("nutrition" to System.currentTimeMillis())
         run("nutrition") {
             try {
                 val r = AiClient.nutritionPlan()
@@ -149,7 +177,7 @@ object AiJobs {
                 UiState.nutritionComment = r.comment
                 prefs().edit().putString("nutritionComment", r.comment).apply()
             } catch (e: Exception) {
-                UiState.nutritionError = e.message ?: "Ошибка"
+                UiState.nutritionError = errText(e)
             } finally {
                 UiState.nutritionLoading = false
             }
@@ -163,13 +191,14 @@ object AiJobs {
         prefs().edit().putString("programRequest", request).apply()
         UiState.programLoading = true
         UiState.programError = null
+        UiState.aiStartedAt = UiState.aiStartedAt + ("program" to System.currentTimeMillis())
         run("program") {
             try {
                 val r = AiClient.buildProgram(request, Store.program)
                 UiState.programResult = r
                 saveProgramResult(r)
             } catch (e: Exception) {
-                UiState.programError = e.message ?: "Ошибка"
+                UiState.programError = errText(e)
             } finally {
                 UiState.programLoading = false
             }

@@ -545,7 +545,7 @@ private fun FoodEditor(e: FoodEntry) {
                         }
                     )
                 }
-                if (e.analyzed && e.items.isNotEmpty() && !analyzing) {
+                if (e.analyzed && e.items.isNotEmpty() && !analyzing && e.id !in Store.foodLocal) {
                     Text(
                         "Пересчёт заменит продукты ниже.",
                         style = MaterialTheme.typography.labelSmall,
@@ -556,6 +556,27 @@ private fun FoodEditor(e: FoodEntry) {
                 if (error != null) {
                     Spacer(Modifier.height(6.dp))
                     Text(error, style = MaterialTheme.typography.bodySmall, color = cs.error)
+                }
+                if (analyzing) {
+                    com.ritm.app.ui.AiProgressLine("food:${e.id}")
+                }
+                if (!analyzing && e.id in Store.foodLocal) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                        Text(
+                            "⚡ Посчитано мгновенно по справочнику",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = cs.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { Store.analyzeFood(e.id, forceAi = true) }) {
+                            Text("Через ИИ", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+                if (!analyzing && e.note.isNotBlank() && com.ritm.app.ai.AiClient.webSearchAvailable()) {
+                    TextButton(onClick = { Store.analyzeFood(e.id, web = true) }) {
+                        Text("🌐 Найти состав в интернете (медленнее, точнее для брендов)", style = MaterialTheme.typography.labelMedium)
+                    }
                 }
             }
         }

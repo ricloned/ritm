@@ -522,19 +522,43 @@ object Store {
     fun removeFoodItem(id: Long, itemId: Long) = mapFood(id) { e -> e.copy(items = e.items.filterNot { it.id == itemId }) }
 
     /** ИИ считает КБЖУ: по комментарию (главное) и по фото. */
-    fun analyzeFood(id: Long) {
+    /** Посчитано мгновенно по справочнику, без ИИ. */
+    var foodLocal by mutableStateOf(setOf<Long>())
+        private set
+
+    /**
+     * Считает КБЖУ. Сначала пробует мгновенно по справочнику (если в комментарии всё с граммами и знакомо),
+     * иначе — ИИ. [forceAi] — сразу ИИ, [web] — ИИ с поиском в интернете.
+     */
+    fun analyzeFood(id: Long, forceAi: Boolean = false, web: Boolean = false) {
         val entry = food.find { it.id == id } ?: return
         if (id in foodAnalyzing) return
         if (entry.photoPath.isBlank() && entry.note.isBlank()) {
             foodErrors = foodErrors + (id to "Напиши, что ты съел, — без фото ИИ больше не на что опереться")
             return
         }
-        foodAnalyzing = foodAnalyzing + id
         foodErrors = foodErrors - id
+        if (!forceAi && !web) {
+            LocalFood.tryLocal(entry.note, myFoods)?.let { r ->
+                food = food.map {
+                    if (it.id == id) it.copy(
+                        title = r.title,
+                        items = r.items.map { item -> item.copy(id = newId()) },
+                        analyzed = true,
+                    ) else it
+                }
+                foodLocal = foodLocal + id
+                save()
+                return
+            }
+        }
+        foodLocal = foodLocal - id
+        foodAnalyzing = foodAnalyzing + id
+        com.ritm.app.ui.UiState.aiStartedAt = com.ritm.app.ui.UiState.aiStartedAt + ("food:$id" to System.currentTimeMillis())
         AiJobs.run("food:$id") {
             try {
                 val current = food.find { it.id == id } ?: return@run
-                val r = AiClient.analyzeFood(current.photoPath, current.note, myFoods)
+                val r = AiClient.analyzeFood(current.photoPath, current.note, myFoods, web)
                 food = food.map {
                     if (it.id == id) it.copy(
                         title = r.title,
@@ -544,11 +568,18 @@ object Store {
                 }
                 save()
             } catch (e: Exception) {
-                foodErrors = foodErrors + (id to (e.message ?: "Не удалось посчитать"))
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    foodErrors = foodErrors + (id to (e.message ?: "Не удалось посчитать"))
+                }
             } finally {
                 foodAnalyzing = foodAnalyzing - id
             }
         }
+    }
+
+    fun cancelFood(id: Long) {
+        AiJobs.cancel("food:$id")
+        foodAnalyzing = foodAnalyzing - id
     }
 
     // ---------------- Мои продукты (справочник КБЖУ на 100 г) ----------------
@@ -686,7 +717,7 @@ object Store {
         val old = settings
         settings = n
         save()
-        val strip = { s: AppSettings -> s.copy(baseUrl = "", apiKey = "", model = "", themeMode = "", themeIndex = 0, updateRepo = "", githubToken = "") }
+        val strip = { s: AppSettings -> s.copy(baseUrl = "", apiKey = "", model = "", themeMode = "", themeIndex = 0, updateRepo = "", githubToken = "", fastModel = "") }
         if (strip(old) != strip(n)) Reminders.scheduleDaily(appContext)
     }
 

@@ -572,6 +572,9 @@ private fun AiPlannerTab(onAdded: () -> Unit) {
                 }
             }
         }
+        if (loading) {
+            item { com.ritm.app.ui.AiProgressLine("planner") }
+        }
         error?.let { msg ->
             item {
                 SoftCard(color = cs.errorContainer) {
