@@ -134,6 +134,8 @@ data class AppSettings(
     val foodWebSearch: Boolean = false,
     /** Быстрая модель для КБЖУ, планера и нормы питания (пусто — основная). */
     val fastModel: String = "",
+    /** Формат API: auto (по адресу) | openai | anthropic. */
+    val apiFormat: String = "auto",
     val foodReminders: Boolean = true,
     val foodTimes: List<Int> = listOf(9 * 60, 14 * 60, 19 * 60),
     /** Профиль для расчёта нормы КБЖУ. */
@@ -349,7 +351,7 @@ internal object Codec {
         .put("foodReminders", s.foodReminders)
         .put("foodTimes", JSONArray().also { a -> s.foodTimes.forEach { a.put(it) } })
         .put("themeMode", s.themeMode).put("themeIndex", s.themeIndex)
-        .put("foodWebAuto", s.foodWebSearch).put("fastModel", s.fastModel)
+        .put("foodWebAuto", s.foodWebSearch).put("fastModel", s.fastModel).put("apiFormat", s.apiFormat)
         .put("updateRepo", s.updateRepo).put("githubToken", s.githubToken)
         .put("sex", s.sex).put("age", s.age).put("heightCm", s.heightCm).put("weightKg", s.weightKg)
         .put("activity", s.activity).put("dietGoal", s.dietGoal).put("nutritionNote", s.nutritionNote)
@@ -391,6 +393,7 @@ internal object Codec {
             weeklyMinute = o.optInt("weeklyMinute", d.weeklyMinute),
             foodWebSearch = o.optBoolean("foodWebAuto", d.foodWebSearch),
             fastModel = o.optString("fastModel", d.fastModel),
+            apiFormat = o.optString("apiFormat", d.apiFormat),
             updateRepo = o.optString("updateRepo", d.updateRepo).ifBlank { d.updateRepo },
             githubToken = o.optString("githubToken", d.githubToken),
             themeMode = o.optString("themeMode", d.themeMode),
@@ -548,4 +551,11 @@ fun maintenanceKcal(s: AppSettings): Int {
         else -> 1.725
     }
     return (bmr * k).toInt()
+}
+
+/** Говорить с сервисом в формате Anthropic (Messages API)? */
+fun AppSettings.isAnthropicFormat(): Boolean = when (apiFormat) {
+    "anthropic" -> true
+    "openai" -> false
+    else -> baseUrl.contains("anthropic.com")
 }

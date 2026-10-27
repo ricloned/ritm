@@ -6,6 +6,7 @@ import com.ritm.app.data.Store
 import com.ritm.app.data.WorkoutLog
 import com.ritm.app.data.toText
 import com.ritm.app.data.maintenanceKcal
+import com.ritm.app.data.isAnthropicFormat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
@@ -58,7 +59,7 @@ object AiClient {
         val base = s.baseUrl.trim().trimEnd('/')
         if (base.isEmpty()) throw AiException("Укажи адрес API в настройках")
 
-        val anthropic = base.contains("anthropic.com")
+        val anthropic = s.isAnthropicFormat()
         val endpoint = when {
             anthropic && base.endsWith("/messages") -> base
             anthropic && base.endsWith("/v1") -> "$base/messages"
@@ -161,6 +162,8 @@ object AiClient {
             if (anthropic) {
                 conn.setRequestProperty("x-api-key", s.apiKey.trim())
                 conn.setRequestProperty("anthropic-version", "2023-06-01")
+                // сторонние шлюзы иногда ждут ключ в Authorization
+                if (!endpoint.contains("anthropic.com")) conn.setRequestProperty("Authorization", "Bearer ${s.apiKey.trim()}")
             } else {
                 conn.setRequestProperty("Authorization", "Bearer ${s.apiKey.trim()}")
                 conn.setRequestProperty("HTTP-Referer", "https://github.com/ritm-app")
@@ -286,7 +289,7 @@ object AiClient {
         val items: List<com.ritm.app.data.FoodItem>,
     )
 
-    private fun isAnthropic(): Boolean = Store.settings.baseUrl.contains("anthropic.com")
+    private fun isAnthropic(): Boolean = Store.settings.isAnthropicFormat()
 
     /** Уменьшает фото до ~1024 px и кодирует в base64 JPEG. */
     private fun encodeImage(path: String): String {
@@ -657,13 +660,20 @@ $TRAINER_RULES
 Текущая программа пользователя (может быть пустой):
 $currentText
 
-Ответь ТОЛЬКО JSON-объектом без markdown и пояснений вокруг:
-{"days": {"1": [{"name": "Жим лёжа", "sets": 4, "reps": 8, "weight": 60}], "2": [], "3": [], "4": [], "5": [], "6": [], "7": []},
- "comment": "2–4 предложения: логика программы и советы"}
-Ключи 1–7 — дни недели: 1 = понедельник, 7 = воскресенье. weight — вес в кг числом (0, если упражнение без веса).
-reps — одно число (для планки — секунды). Названия упражнений на русском.
+Ответь СТРОГО в коротком формате, без markdown и без лишнего текста (так ответ приходит в разы быстрее):
+D1: Название;круги;повторы;вес | Название;круги;повторы;вес | ...
+D2: ...
+...
+D7: ...
+C: комментарий 2–4 предложения — логика программы и правило прогрессии
+
+D1 = понедельник … D7 = воскресенье. Порядок упражнений в строке = порядок в круге.
+Вес — число в кг (0, если без веса). Повторы — одно число (для кардио и растяжки — минуты).
+День отдыха: «D3: -». Если день полностью повторяет другой, можно написать «D5: =D1».
+Пример: «D1: Жим гантелей лёжа;4;8;25 | Подъём гантелей на бицепс;3;10;15 | Кардио на дорожке;1;10;0»
+Названия упражнений на русском.
 """.trim()
-        val recent = Store.logs.sortedByDescending { it.finishedAt }.take(6)
+        val recent = Store.logs.sortedByDescending { it.finishedAt }.take(3)
         val st = Store.settings
         val goals = Store.goals.filter { it.doneAt == null }.sortedByDescending { it.pinned }.take(10)
         val lastWeight = Store.checks.filter { it.weight != null }.maxByOrNull { it.date }?.weight ?: st.weightKg
@@ -688,7 +698,64 @@ reps — одно число (для планки — секунды). Назв�
                 recent.forEach { appendLine(); appendLine(it.toText()) }
             }
         }
-        val raw = complete(system, fullRequest, maxTokens = 4000)
+        val raw = complete(system, fullRequest, maxTokens = 2500)
+        return parseCompactProgram(raw) ?: parseJsonProgram(raw)
+    }
+
+    /** Разбор формата «D1: Название;круги;повторы;вес | …», «D5: =D1», «C: комментарий». */
+    private fun parseCompactProgram(raw: String): ProgramResult? {
+        val dayRe = Regex("""^\s*\**\s*D\s*([1-7])\s*\**\s*[:：]\s*(.*)$""", RegexOption.IGNORE_CASE)
+        val refRe = Regex("""^=\s*D\s*([1-7])""", RegexOption.IGNORE_CASE)
+        val lines = mutableMapOf<Int, String>()
+        val comment = StringBuilder()
+        var inComment = false
+        raw.lines().forEach { line ->
+            val m = dayRe.find(line)
+            when {
+                m != null -> {
+                    lines[m.groupValues[1].toInt()] = m.groupValues[2].trim()
+                    inComment = false
+                }
+                Regex("""^\s*\**\s*C\s*\**\s*[:：]""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> {
+                    comment.append(line.substringAfter(':').substringAfter('：').trim())
+                    inComment = true
+                }
+                inComment && line.isNotBlank() -> comment.append(' ').append(line.trim())
+            }
+        }
+        if (lines.isEmpty()) return null
+        val parsed = HashMap<Int, List<Exercise>>()
+        fun parseDay(d: Int, depth: Int = 0): List<Exercise> {
+            parsed[d]?.let { return it }
+            val text = lines[d] ?: return emptyList()
+            refRe.find(text)?.let { r ->
+                val src = r.groupValues[1].toInt()
+                if (src == d || depth > 3) return emptyList()
+                // копия другого дня — с новыми id
+                return parseDay(src, depth + 1).map { it.copy(id = Store.newId()) }
+            }
+            if (text == "-" || text.startsWith("отдых", true) || text.isBlank()) return emptyList()
+            val list = text.split('|').mapNotNull { part ->
+                val f = part.split(';').map { it.trim() }
+                val name = f.getOrNull(0)?.trim('*', ' ', '-').orEmpty()
+                if (name.isEmpty()) return@mapNotNull null
+                Exercise(
+                    id = Store.newId(),
+                    name = name,
+                    sets = firstInt(f.getOrNull(1), 3).coerceIn(1, 10),
+                    reps = firstInt(f.getOrNull(2), 10).coerceIn(1, 1000),
+                    weight = firstDouble(f.getOrNull(3)),
+                )
+            }
+            parsed[d] = list
+            return list
+        }
+        val days = (1..7).associateWith { parseDay(it) }
+        if (days.values.all { it.isEmpty() }) return null
+        return ProgramResult(days, comment.toString().trim())
+    }
+
+    private fun parseJsonProgram(raw: String): ProgramResult {
         val start = raw.indexOf('{')
         val end = raw.lastIndexOf('}')
         if (start < 0 || end <= start) throw AiException("ИИ ответил не программой. Попробуй ещё раз.")

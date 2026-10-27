@@ -174,6 +174,20 @@ fun SettingsScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
                 )
+                Spacer(Modifier.height(8.dp))
+                Text("Формат API", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("auto" to "Авто", "openai" to "OpenAI", "anthropic" to "Anthropic").forEach { (k, label) ->
+                        Pill(label, s.apiFormat == k) { commit(s.copy(apiFormat = k)) }
+                    }
+                }
+                Text(
+                    "Если сервис даёт два адреса: для OpenAI — адрес с /v1 на конце, для Anthropic — без него.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
                     value = s.apiKey,
