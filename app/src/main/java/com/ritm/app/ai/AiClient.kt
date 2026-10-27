@@ -93,6 +93,37 @@ object AiClient {
                 }
         }
 
+        body.put("stream", true)
+        val payload = body.toString().toByteArray(Charsets.UTF_8)
+
+        // До 3 попыток: при перегрузке/таймауте шлюза (5xx, 429, обрыв связи) повторяем с паузой.
+        var lastError: AiException? = null
+        for (attempt in 0 until 3) {
+            if (attempt > 0) kotlinx.coroutines.delay(if (attempt == 1) 3_000L else 8_000L)
+            try {
+                return@withContext requestOnce(endpoint, anthropic, s, payload)
+            } catch (e: RetryableAi) {
+                lastError = AiException(e.message ?: "Сервис ИИ не ответил")
+            }
+        }
+        throw lastError ?: AiException("Сервис ИИ не ответил")
+    }
+
+    /** Ошибка, после которой есть смысл повторить запрос. */
+    private class RetryableAi(message: String) : Exception(message)
+
+    private fun friendlyHttp(code: Int, text: String): String = when (code) {
+        401, 403 -> "Ключ API не подходит (ошибка $code). Проверь ключ в настройках."
+        402 -> "На балансе сервиса ИИ закончились деньги (ошибка 402)."
+        404 -> "Модель или адрес API не найдены (ошибка 404). Проверь модель в настройках."
+        408, 504, 524 -> "Сервис ИИ не успел ответить (ошибка $code). Попробуй ещё раз — или выбери модель побыстрее."
+        429 -> "Слишком много запросов к ИИ (ошибка 429). Подожди минуту."
+        500, 502, 503, 529 -> "Сервис ИИ сейчас перегружен (ошибка $code). Попробуй через пару минут."
+        else -> "Ошибка $code: ${extractError(text)}"
+    }
+
+    /** Один запрос с потоковым ответом (SSE): соединение не простаивает, шлюз его не обрывает. */
+    private fun requestOnce(endpoint: String, anthropic: Boolean, s: com.ritm.app.data.AppSettings, payload: ByteArray): String {
         val conn = try {
             URL(endpoint).openConnection() as HttpURLConnection
         } catch (e: Exception) {
@@ -101,10 +132,10 @@ object AiClient {
         try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 30_000
-            conn.readTimeout = 240_000
+            conn.readTimeout = 120_000 // между кусками потока
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("Accept", "text/event-stream, application/json")
             if (anthropic) {
                 conn.setRequestProperty("x-api-key", s.apiKey.trim())
                 conn.setRequestProperty("anthropic-version", "2023-06-01")
@@ -113,42 +144,96 @@ object AiClient {
                 conn.setRequestProperty("HTTP-Referer", "https://github.com/ritm-app")
                 conn.setRequestProperty("X-Title", "Ritm")
             }
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            conn.outputStream.use { it.write(payload) }
 
             val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-            if (code !in 200..299) throw AiException("Ошибка $code: ${extractError(text)}")
+            if (code !in 200..299) {
+                val text = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                val msg = friendlyHttp(code, text)
+                if (code in listOf(408, 429, 500, 502, 503, 504, 520, 522, 524, 529)) throw RetryableAi(msg)
+                throw AiException(msg)
+            }
 
-            val json = JSONObject(text)
-            val out = if (anthropic) {
-                val arr = json.optJSONArray("content") ?: JSONArray()
-                // при веб-поиске итоговый текст идёт после результатов поиска
-                val sb = StringBuilder()
-                for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    when (o.optString("type")) {
-                        "text" -> sb.append(o.optString("text"))
-                        "server_tool_use", "web_search_tool_result" -> sb.setLength(0)
+            val contentType = conn.contentType ?: ""
+            val out = StringBuilder()
+            conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                if (!contentType.contains("event-stream")) {
+                    // сервер не поддержал поток — пришёл обычный JSON
+                    return parseFull(JSONObject(reader.readText()), anthropic)
+                }
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (!line.startsWith("data:")) continue
+                    val data = line.removePrefix("data:").trim()
+                    if (data.isEmpty() || data == "[DONE]") {
+                        if (data == "[DONE]") break
+                        continue
+                    }
+                    val ev = try {
+                        JSONObject(data)
+                    } catch (_: JSONException) {
+                        continue
+                    }
+                    ev.optJSONObject("error")?.let { err ->
+                        val m = err.optString("message").ifBlank { "ошибка сервиса" }
+                        throw RetryableAi("Сервис ИИ оборвал ответ: $m")
+                    }
+                    if (anthropic) {
+                        when (ev.optString("type")) {
+                            "content_block_start" -> {
+                                val t = ev.optJSONObject("content_block")?.optString("type")
+                                // после веб-поиска модель пишет итог заново
+                                if (t == "server_tool_use" || t == "web_search_tool_result") out.setLength(0)
+                            }
+                            "content_block_delta" -> {
+                                val d = ev.optJSONObject("delta")
+                                if (d?.optString("type") == "text_delta") out.append(d.optString("text"))
+                            }
+                            "error" -> throw RetryableAi("Сервис ИИ перегружен, повторяю…")
+                        }
+                    } else {
+                        val delta = ev.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("delta")
+                        if (delta != null && !delta.isNull("content")) out.append(delta.optString("content"))
                     }
                 }
-                sb.toString()
-            } else {
-                val msg = json.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
-                if (msg.isNull("content")) "" else msg.getString("content")
             }
-            val cleaned = out.replace(Regex("(?s)<think>.*?</think>"), "").trim()
-            if (cleaned.isEmpty()) throw AiException("Модель вернула пустой ответ")
-            cleaned
+            val cleaned = out.toString().replace(Regex("(?s)<think>.*?</think>"), "").trim()
+            if (cleaned.isEmpty()) throw RetryableAi("Модель вернула пустой ответ")
+            return cleaned
         } catch (e: AiException) {
             throw e
+        } catch (e: RetryableAi) {
+            throw e
+        } catch (e: java.net.SocketTimeoutException) {
+            throw RetryableAi("Сервис ИИ слишком долго не отвечал")
         } catch (e: IOException) {
-            throw AiException("Нет связи с API: ${e.message ?: e.javaClass.simpleName}")
+            throw RetryableAi("Нет связи с API: ${e.message ?: e.javaClass.simpleName}")
         } catch (e: JSONException) {
             throw AiException("Не удалось разобрать ответ сервера")
         } finally {
             conn.disconnect()
         }
+    }
+
+    private fun parseFull(json: JSONObject, anthropic: Boolean): String {
+        val out = if (anthropic) {
+            val arr = json.optJSONArray("content") ?: JSONArray()
+            val sb = StringBuilder()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                when (o.optString("type")) {
+                    "text" -> sb.append(o.optString("text"))
+                    "server_tool_use", "web_search_tool_result" -> sb.setLength(0)
+                }
+            }
+            sb.toString()
+        } else {
+            val msg = json.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+            if (msg.isNull("content")) "" else msg.getString("content")
+        }
+        val cleaned = out.replace(Regex("(?s)<think>.*?</think>"), "").trim()
+        if (cleaned.isEmpty()) throw AiException("Модель вернула пустой ответ")
+        return cleaned
     }
 
     private fun extractError(text: String): String {
@@ -547,11 +632,29 @@ $currentText
 reps — одно число (для планки — секунды). Названия упражнений на русском.
 """.trim()
         val recent = Store.logs.sortedByDescending { it.finishedAt }.take(6)
-        val fullRequest = if (recent.isEmpty()) request else buildString {
+        val st = Store.settings
+        val goals = Store.goals.filter { it.doneAt == null }.sortedByDescending { it.pinned }.take(10)
+        val lastWeight = Store.checks.filter { it.weight != null }.maxByOrNull { it.date }?.weight ?: st.weightKg
+        val fullRequest = buildString {
             appendLine(request)
             appendLine()
-            appendLine("Мои последние тренировки (круговые):")
-            recent.forEach { appendLine(); appendLine(it.toText()) }
+            appendLine(
+                "Обо мне (из настроек приложения): ${if (st.sex == "f") "женщина" else "мужчина"}, ${st.age} лет, " +
+                    "рост ${st.heightCm} см, вес ${num(lastWeight)} кг. Цель питания: " + when (st.dietGoal) {
+                    "cut" -> "похудение"
+                    "maintain" -> "поддержание"
+                    "bulk" -> "набор массы"
+                    else -> "рекомпозиция (жир вниз, мышцы и рабочие веса вверх)"
+                } + "."
+            )
+            if (goals.isNotEmpty()) {
+                appendLine("Мои цели: " + goals.joinToString("; ") { it.title })
+            }
+            if (recent.isNotEmpty()) {
+                appendLine()
+                appendLine("Мои последние тренировки (круговые):")
+                recent.forEach { appendLine(); appendLine(it.toText()) }
+            }
         }
         val raw = complete(system, fullRequest, maxTokens = 4000)
         val start = raw.indexOf('{')
