@@ -270,14 +270,14 @@ fun appendDictated(old: String, add: String): String = if (old.isBlank()) add el
 @Composable
 fun AiProgressLine(key: String) {
     val started = UiState.aiStartedAt[key] ?: return
-    var now by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+    val nowState = androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
     androidx.compose.runtime.LaunchedEffect(started) {
         while (true) {
-            now = System.currentTimeMillis()
+            nowState.longValue = System.currentTimeMillis()
             kotlinx.coroutines.delay(1000)
         }
     }
-    val sec = ((now - started) / 1000).coerceAtLeast(0)
+    val sec: Long = ((nowState.longValue - started) / 1000L).coerceAtLeast(0L)
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text(
             "Идёт ${sec / 60}:${(sec % 60).toString().padStart(2, '0')} · можно свернуть приложение",
