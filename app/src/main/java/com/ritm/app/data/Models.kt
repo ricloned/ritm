@@ -110,6 +110,9 @@ data class Goal(
     val pinned: Boolean = false,
 )
 
+/** Выпитая вода. */
+data class WaterEntry(val id: Long, val date: LocalDate, val time: Long, val ml: Int)
+
 /** Еженедельный замер: вес, талия, фото. */
 data class BodyCheck(
     val id: Long,
@@ -152,6 +155,7 @@ data class AppSettings(
     val proteinGoal: Int = 160,
     val fatGoal: Int = 75,
     val carbsGoal: Int = 260,
+    val waterGoal: Int = 2500,
     val weeklyReminder: Boolean = true,
     val weeklyDay: Int = 7,
     val weeklyHour: Int = 10,
@@ -356,7 +360,7 @@ internal object Codec {
         .put("sex", s.sex).put("age", s.age).put("heightCm", s.heightCm).put("weightKg", s.weightKg)
         .put("activity", s.activity).put("dietGoal", s.dietGoal).put("nutritionNote", s.nutritionNote)
         .put("kcalGoal", s.kcalGoal).put("proteinGoal", s.proteinGoal)
-        .put("fatGoal", s.fatGoal).put("carbsGoal", s.carbsGoal)
+        .put("fatGoal", s.fatGoal).put("carbsGoal", s.carbsGoal).put("waterGoal", s.waterGoal)
         .put("weeklyReminder", s.weeklyReminder).put("weeklyDay", s.weeklyDay)
         .put("weeklyHour", s.weeklyHour).put("weeklyMinute", s.weeklyMinute)
 
@@ -387,6 +391,7 @@ internal object Codec {
             proteinGoal = o.optInt("proteinGoal", d.proteinGoal),
             fatGoal = o.optInt("fatGoal", d.fatGoal),
             carbsGoal = o.optInt("carbsGoal", d.carbsGoal),
+            waterGoal = o.optInt("waterGoal", d.waterGoal).coerceIn(250, 10000),
             weeklyReminder = o.optBoolean("weeklyReminder", d.weeklyReminder),
             weeklyDay = o.optInt("weeklyDay", d.weeklyDay).coerceIn(1, 7),
             weeklyHour = o.optInt("weeklyHour", d.weeklyHour),
@@ -400,6 +405,16 @@ internal object Codec {
             themeIndex = o.optInt("themeIndex", d.themeIndex),
         )
     }
+
+    fun waterToJson(w: WaterEntry): JSONObject = JSONObject()
+        .put("id", w.id).put("date", w.date.toString()).put("time", w.time).put("ml", w.ml)
+
+    fun waterFromJson(o: JSONObject): WaterEntry = WaterEntry(
+        id = o.getLong("id"),
+        date = LocalDate.parse(o.getString("date")),
+        time = o.optLong("time"),
+        ml = o.optInt("ml"),
+    )
 
     fun checkToJson(c: BodyCheck): JSONObject = JSONObject()
         .put("id", c.id)

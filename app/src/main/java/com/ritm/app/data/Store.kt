@@ -45,6 +45,8 @@ object Store {
         private set
     var checks by mutableStateOf(listOf<BodyCheck>())
         private set
+    var water by mutableStateOf(listOf<WaterEntry>())
+        private set
     var settings by mutableStateOf(AppSettings())
         private set
 
@@ -93,6 +95,7 @@ object Store {
             food = o.optJSONArray("food").mapObjects(Codec::foodFromJson)
             goals = o.optJSONArray("goals").mapObjects(Codec::goalFromJson)
             checks = o.optJSONArray("checks").mapObjects(Codec::checkFromJson)
+            water = o.optJSONArray("water").mapObjects(Codec::waterFromJson)
             myFoods = o.optJSONArray("myFoods").mapObjects(Codec::myFoodFromJson)
             if (!o.optBoolean("foodsSeeded")) myFoods = myFoods + SEED_FOODS.filter { s -> myFoods.none { it.name.equals(s.name, true) } }
             o.optJSONObject("settings")?.let { settings = Codec.settingsFromJson(it) }
@@ -126,6 +129,7 @@ object Store {
                 .put("food", food.toJsonArray(Codec::foodToJson))
                 .put("goals", goals.toJsonArray(Codec::goalToJson))
                 .put("checks", checks.toJsonArray(Codec::checkToJson))
+                .put("water", water.toJsonArray(Codec::waterToJson))
                 .put("myFoods", myFoods.toJsonArray(Codec::myFoodToJson))
                 .put("foodsSeeded", true)
                 .put("settings", Codec.settingsToJson(settings))
@@ -668,6 +672,21 @@ object Store {
 
     fun deleteGoal(id: Long) {
         goals = goals.filterNot { it.id == id }
+        save()
+    }
+
+    // ---------------- Вода ----------------
+
+    fun addWater(date: LocalDate, ml: Int) {
+        if (ml <= 0) return
+        val time = if (date == LocalDate.now()) System.currentTimeMillis()
+        else date.atTime(12, 0).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        water = water + WaterEntry(newId(), date, time, ml.coerceAtMost(5000))
+        save()
+    }
+
+    fun deleteWater(id: Long) {
+        water = water.filterNot { it.id == id }
         save()
     }
 

@@ -275,6 +275,7 @@ fun FoodTab() {
         if (entries.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) { DayTotals(entries) }
         }
+        item(span = { GridItemSpan(maxLineSpan) }) { WaterCard(date) }
     }
 }
 
