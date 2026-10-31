@@ -335,10 +335,20 @@ object Store {
     }
 
     /** Завершает тренировку. Возвращает null, если ничего не заполнено. */
-    fun finishWorkout(date: LocalDate, exercises: List<Exercise>): WorkoutLog? {
+    /** Подходы, где вписаны повторы, но галочка не стоит. */
+    fun untickedFilled(date: LocalDate, exercises: List<Exercise>): Int =
+        exercises.sumOf { ex -> setsFor(date, ex).count { !it.done && it.reps.isNotBlank() } }
+
+    /**
+     * Засчитываются только отмеченные галочкой подходы.
+     * [includeUnticked] — ещё и те, где вручную вписаны повторы (по выбору пользователя).
+     * Подход, где только перенесённый вес, не засчитывается никогда.
+     */
+    fun finishWorkout(date: LocalDate, exercises: List<Exercise>, includeUnticked: Boolean = false): WorkoutLog? {
         val logged = exercises.map { ex ->
             val sets = setsFor(date, ex).mapIndexedNotNull { i, s ->
-                if (s.reps.isBlank() && s.weight.isBlank() && !s.done) return@mapIndexedNotNull null
+                val counts = s.done || (includeUnticked && s.reps.isNotBlank())
+                if (!counts) return@mapIndexedNotNull null
                 val (hw, hr) = hint(ex, i)
                 s.copy(
                     reps = s.reps.ifBlank { hr },
@@ -457,6 +467,18 @@ object Store {
 
     fun clearChat(logId: Long) {
         logs = logs.map { if (it.id == logId) it.copy(chat = emptyList()) else it }
+        save()
+    }
+
+    /** Убрать один подход из сохранённой тренировки. */
+    fun removeLogSet(logId: Long, exIndex: Int, setIndex: Int) {
+        logs = logs.map { l ->
+            if (l.id != logId) l else l.copy(
+                exercises = l.exercises.mapIndexed { i, e ->
+                    if (i != exIndex) e else e.copy(sets = e.sets.filterIndexed { j, _ -> j != setIndex })
+                }
+            )
+        }
         save()
     }
 

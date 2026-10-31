@@ -2,6 +2,8 @@ package com.ritm.app.ui.workout
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -95,6 +97,28 @@ fun TodayTab(onOpenProgram: () -> Unit) {
     val programDay = UiState.todayProgramDay
     val exercises = Store.program[programDay].orEmpty()
     val todayLog = Store.logs.filter { it.date == today }.maxByOrNull { it.finishedAt }
+    var askUnticked by remember { mutableStateOf(0) }
+    if (askUnticked > 0) {
+        AlertDialog(
+            onDismissRequest = { askUnticked = 0 },
+            title = { Text("Не отмечено: $askUnticked") },
+            text = { Text("В этих подходах вписаны повторы, но не стоит галочка. Засчитать их как сделанные?") },
+            confirmButton = {
+                Button(onClick = {
+                    askUnticked = 0
+                    if (Store.finishWorkout(today, exercises, includeUnticked = true) != null) UiState.workoutAgain = false
+                }) { Text("Засчитать") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    askUnticked = 0
+                    if (Store.finishWorkout(today, exercises) == null) {
+                        Toast.makeText(ctx, "Отметь галочкой хотя бы один подход", Toast.LENGTH_SHORT).show()
+                    } else UiState.workoutAgain = false
+                }) { Text("Только отмеченные") }
+            },
+        )
+    }
 
     if (todayLog != null && !UiState.workoutAgain) {
         LazyColumn(
@@ -241,11 +265,16 @@ fun TodayTab(onOpenProgram: () -> Unit) {
         item(key = "finish") {
             Button(
                 onClick = {
-                    val log = Store.finishWorkout(today, exercises)
-                    if (log == null) {
-                        Toast.makeText(ctx, "Заполни хотя бы одно упражнение", Toast.LENGTH_SHORT).show()
+                    val unticked = Store.untickedFilled(today, exercises)
+                    if (unticked > 0) {
+                        askUnticked = unticked
                     } else {
-                        UiState.workoutAgain = false
+                        val log = Store.finishWorkout(today, exercises)
+                        if (log == null) {
+                            Toast.makeText(ctx, "Отметь галочкой хотя бы один подход", Toast.LENGTH_SHORT).show()
+                        } else {
+                            UiState.workoutAgain = false
+                        }
                     }
                 },
                 modifier = Modifier
@@ -462,10 +491,16 @@ fun LogContent(log: WorkoutLog) {
     val rounds = main.maxOfOrNull { it.sets.size } ?: 0
     Column {
         for (r in 0 until rounds) {
-            LogSection("Круг ${r + 1}", r == 0, main.mapNotNull { e -> e.sets.getOrNull(r)?.let { e.name to it } })
+            LogSection("Круг ${r + 1}", r == 0, main.mapNotNull { e ->
+                val ei = log.exercises.indexOfFirst { it === e }
+                e.sets.getOrNull(r)?.let { LogRow(e.name, it) { Store.removeLogSet(log.id, ei, r) } }
+            })
         }
         if (finish.isNotEmpty()) {
-            LogSection("Финиш", rounds == 0, finish.flatMap { e -> e.sets.map { e.name to it } })
+            LogSection("Финиш", rounds == 0, finish.flatMap { e ->
+                val ei = log.exercises.indexOfFirst { it === e }
+                e.sets.mapIndexed { si, set -> LogRow(e.name, set) { Store.removeLogSet(log.id, ei, si) } }
+            })
         }
         val skipped = log.exercises.filter { it.sets.isEmpty() }
         if (skipped.isNotEmpty()) {
@@ -496,8 +531,9 @@ fun LogContent(log: WorkoutLog) {
 }
 
 @Composable
-private fun LogSection(title: String, first: Boolean, rows: List<Pair<String, SetEntry>>) {
+private fun LogSection(title: String, first: Boolean, rows: List<LogRow>) {
     val cs = MaterialTheme.colorScheme
+    var toRemove by remember { mutableStateOf<LogRow?>(null) }
     Text(
         title,
         style = MaterialTheme.typography.labelLarge,
@@ -505,10 +541,11 @@ private fun LogSection(title: String, first: Boolean, rows: List<Pair<String, Se
         color = cs.primary,
         modifier = Modifier.padding(top = if (first) 0.dp else 10.dp, bottom = 2.dp)
     )
-    rows.forEach { (name, s) ->
+    rows.forEach { row ->
+        val s = row.set
         Text(
             buildAnnotatedString {
-                append("$name ")
+                append("${row.name} ")
                 val w = s.weight.toDoubleOrNull()
                 withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
                     append(if (w != null && w > 0) "${com.ritm.app.ui.fmtNum(w)}кг на ${s.reps}" else "на ${s.reps}")
@@ -520,10 +557,28 @@ private fun LogSection(title: String, first: Boolean, rows: List<Pair<String, Se
                 }
             },
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(vertical = 1.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .pointerInput(row) { detectTapGestures(onLongPress = { toRemove = row }) }
+                .padding(vertical = 1.dp)
+        )
+    }
+    toRemove?.let { row ->
+        AlertDialog(
+            onDismissRequest = { toRemove = null },
+            title = { Text("Убрать подход?") },
+            text = { Text("«${row.name}» в блоке «$title» будет убран из записи. Тоннаж пересчитается сам, отчёт ИИ можно обновить кнопкой ⟳.") },
+            confirmButton = {
+                TextButton(onClick = { row.remove(); toRemove = null }) {
+                    Text("Убрать", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { toRemove = null }) { Text("Отмена") } },
         )
     }
 }
+
+class LogRow(val name: String, val set: SetEntry, val remove: () -> Unit)
 
 // ======================= Чат с тренером =======================
 
