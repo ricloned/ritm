@@ -55,13 +55,18 @@ class MainActivity : ComponentActivity() {
         if (intent == null) return
         if (intent.getStringExtra(Reminders.EXTRA_OPEN) == Reminders.OPEN_PROGRESS_NEW) {
             intent.removeExtra(Reminders.EXTRA_OPEN)
-            UiState.mainTab = MainTab.Progress
+            UiState.mainTab = MainTab.Workout
+            UiState.workoutSub = 3
             UiState.progressNew = true
+        }
+        if (intent.getStringExtra(Reminders.EXTRA_OPEN) == Reminders.OPEN_HABITS) {
+            intent.removeExtra(Reminders.EXTRA_OPEN)
+            UiState.mainTab = MainTab.Habits
+            UiState.habitsSub = 0
         }
         if (intent.getStringExtra(Reminders.EXTRA_OPEN) == Reminders.OPEN_FOOD_CAMERA) {
             intent.removeExtra(Reminders.EXTRA_OPEN)
-            UiState.mainTab = MainTab.Workout
-            UiState.workoutSub = 1
+            UiState.mainTab = MainTab.Food
             UiState.foodDate = java.time.LocalDate.now()
             UiState.openFoodCamera = true
         }

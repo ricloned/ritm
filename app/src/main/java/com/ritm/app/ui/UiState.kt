@@ -28,6 +28,7 @@ object UiState {
     var mainTab by mutableStateOf(MainTab.Plans)
     var plansSub by mutableIntStateOf(0)
     var workoutSub by mutableIntStateOf(0)
+    var habitsSub by mutableIntStateOf(0)
 
     var tasksDate by mutableStateOf(LocalDate.now())
     var foodDate by mutableStateOf(LocalDate.now())

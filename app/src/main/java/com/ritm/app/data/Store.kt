@@ -47,6 +47,8 @@ object Store {
         private set
     var water by mutableStateOf(listOf<WaterEntry>())
         private set
+    var habits by mutableStateOf(listOf<Habit>())
+        private set
     var settings by mutableStateOf(AppSettings())
         private set
 
@@ -96,6 +98,7 @@ object Store {
             goals = o.optJSONArray("goals").mapObjects(Codec::goalFromJson)
             checks = o.optJSONArray("checks").mapObjects(Codec::checkFromJson)
             water = o.optJSONArray("water").mapObjects(Codec::waterFromJson)
+            habits = o.optJSONArray("habits").mapObjects(Codec::habitFromJson)
             myFoods = o.optJSONArray("myFoods").mapObjects(Codec::myFoodFromJson)
             if (!o.optBoolean("foodsSeeded")) myFoods = myFoods + SEED_FOODS.filter { s -> myFoods.none { it.name.equals(s.name, true) } }
             o.optJSONObject("settings")?.let { settings = Codec.settingsFromJson(it) }
@@ -130,6 +133,7 @@ object Store {
                 .put("goals", goals.toJsonArray(Codec::goalToJson))
                 .put("checks", checks.toJsonArray(Codec::checkToJson))
                 .put("water", water.toJsonArray(Codec::waterToJson))
+                .put("habits", habits.toJsonArray(Codec::habitToJson))
                 .put("myFoods", myFoods.toJsonArray(Codec::myFoodToJson))
                 .put("foodsSeeded", true)
                 .put("settings", Codec.settingsToJson(settings))
@@ -694,6 +698,61 @@ object Store {
 
     fun deleteGoal(id: Long) {
         goals = goals.filterNot { it.id == id }
+        save()
+    }
+
+    // ---------------- Челленджи ----------------
+
+    fun addHabit(title: String, emoji: String, remind: Boolean, remindMin: Int) {
+        if (title.isBlank()) return
+        val h = Habit(
+            id = newId(), title = title.trim(), emoji = emoji, createdAt = System.currentTimeMillis(),
+            remind = remind, remindMin = remindMin,
+            attempts = listOf(Attempt(LocalDate.now())),
+        )
+        habits = habits + h
+        save()
+        Reminders.scheduleHabits(appContext)
+    }
+
+    fun updateHabit(h: Habit) {
+        habits = habits.map { if (it.id == h.id) h else it }
+        save()
+        Reminders.scheduleHabits(appContext)
+    }
+
+    fun deleteHabit(id: Long) {
+        Reminders.cancelHabit(appContext, id)
+        habits = habits.filterNot { it.id == id }
+        save()
+    }
+
+    /**
+     * Отметка дня: true — сделал, false — провал (серия сгорает, начинается новая попытка), null — снять отметку.
+     */
+    fun markHabit(id: Long, date: LocalDate, value: Boolean?) {
+        habits = habits.map { h ->
+            if (h.id != id) return@map h
+            val prev = h.marks[date]
+            var marks = if (value == null) h.marks - date else h.marks + (date to value)
+            var attempts = h.attempts.ifEmpty { listOf(Attempt(date)) }
+            // сняли провал — восстанавливаем сгоревшую попытку, если новая ещё пустая
+            if (prev == false && value != false) {
+                val last = attempts.last()
+                val burned = attempts.getOrNull(attempts.size - 2)
+                if (burned != null && burned.end == date && last.end == null &&
+                    marks.keys.none { !it.isBefore(last.start) }
+                ) attempts = attempts.dropLast(2) + burned.copy(end = null)
+            }
+            // провал — текущая попытка сгорает, следующая начинается с завтрашнего дня
+            if (value == false && prev != false) {
+                val cur = attempts.last()
+                if (cur.end == null && !date.isBefore(cur.start)) {
+                    attempts = attempts.dropLast(1) + cur.copy(end = date) + Attempt(date.plusDays(1))
+                }
+            }
+            h.copy(marks = marks, attempts = attempts)
+        }
         save()
     }
 

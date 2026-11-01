@@ -29,6 +29,7 @@ object Reminders {
     const val CH_FOOD = "food"
     const val EXTRA_OPEN = "open"
     const val OPEN_FOOD_CAMERA = "food_camera"
+    const val OPEN_HABITS = "habits"
     const val OPEN_PROGRESS_NEW = "progress_new"
     private const val RC_WEEKLY = 30
     private const val NOTIF_WEEKLY = 100004
@@ -158,6 +159,38 @@ object Reminders {
     fun rescheduleAll(ctx: Context) {
         Store.tasks.forEach { scheduleTask(ctx, it) }
         scheduleDaily(ctx)
+        scheduleHabits(ctx)
+    }
+
+    // ---------------- Челленджи ----------------
+
+    private fun habitIntent(ctx: Context, id: Long) = Intent(ctx, AlarmReceiver::class.java)
+        .setAction("com.ritm.app.HABIT_$id")
+        .putExtra(EXTRA_TYPE, "habit")
+        .putExtra(EXTRA_TASK_ID, id)
+
+    private fun habitCode(id: Long) = 50_000 + (id % 40_000).toInt()
+
+    fun scheduleHabits(ctx: Context) {
+        val am = ctx.getSystemService(AlarmManager::class.java) ?: return
+        Store.habits.forEach { h ->
+            val pi = pending(ctx, habitCode(h.id), habitIntent(ctx, h.id))
+            if (h.remind && h.current != null) setAlarm(ctx, nextAt(h.remindMin / 60, h.remindMin % 60), pi) else am.cancel(pi)
+        }
+    }
+
+    fun cancelHabit(ctx: Context, id: Long) {
+        val am = ctx.getSystemService(AlarmManager::class.java) ?: return
+        am.cancel(pending(ctx, habitCode(id), habitIntent(ctx, id)))
+    }
+
+    fun showHabit(ctx: Context, id: Long, force: Boolean = false) {
+        val h = Store.habits.find { it.id == id } ?: return
+        if (!force && h.marks.containsKey(LocalDate.now())) return
+        val streak = h.streak
+        val text = if (streak > 0) "Серия $streak дн. 🔥 — отметь сегодняшний день, чтобы не сгорела"
+        else "Отметь сегодняшний день — начни серию"
+        show(ctx, habitCode(id), CH_DAILY, "${h.emoji} ${h.title}", text, OPEN_HABITS)
     }
 
     fun canNotify(ctx: Context): Boolean =
@@ -253,6 +286,10 @@ class AlarmReceiver : BroadcastReceiver() {
             "workout" -> {
                 Reminders.showWorkout(context)
                 Reminders.scheduleDaily(context)
+            }
+            "habit" -> {
+                Reminders.showHabit(context, intent.getLongExtra(Reminders.EXTRA_TASK_ID, -1L))
+                Reminders.scheduleHabits(context)
             }
             "weekly" -> {
                 Reminders.showWeekly(context)

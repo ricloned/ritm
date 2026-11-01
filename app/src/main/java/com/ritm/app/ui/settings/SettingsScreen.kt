@@ -406,7 +406,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = cs.outlineVariant)
                 ToggleTimeRow(
                     title = "Отчёт недели 📸",
-                    subtitle = "Вес и фото во вкладке «Прогресс»",
+                    subtitle = "Вес и фото: Тренировки → Прогресс",
                     enabled = s.weeklyReminder,
                     time = LocalTime.of(s.weeklyHour, s.weeklyMinute),
                     onToggle = { commit(s.copy(weeklyReminder = it)) },

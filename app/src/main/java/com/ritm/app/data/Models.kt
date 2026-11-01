@@ -110,6 +110,33 @@ data class Goal(
     val pinned: Boolean = false,
 )
 
+/** Попытка челленджа: с какого дня и когда сгорела (null — идёт сейчас). */
+data class Attempt(val start: LocalDate, val end: LocalDate? = null)
+
+/** Ежедневный челлендж: отмечаешь каждый день, провал сжигает серию. */
+data class Habit(
+    val id: Long,
+    val title: String,
+    val emoji: String,
+    val createdAt: Long,
+    val remind: Boolean = true,
+    val remindMin: Int = 21 * 60,
+    /** дата → true (сделал) / false (провалил) */
+    val marks: Map<LocalDate, Boolean> = emptyMap(),
+    val attempts: List<Attempt> = emptyList(),
+) {
+    val current: Attempt? get() = attempts.lastOrNull()?.takeIf { it.end == null }
+
+    /** Сколько дней отмечено «сделал» в попытке. */
+    fun daysIn(a: Attempt, today: LocalDate = LocalDate.now()): Int {
+        val end = a.end ?: today
+        return marks.count { (d, ok) -> ok && !d.isBefore(a.start) && !d.isAfter(end) }
+    }
+
+    val streak: Int get() = current?.let { daysIn(it) } ?: 0
+    val best: Int get() = attempts.maxOfOrNull { daysIn(it) } ?: 0
+}
+
 /** Выпитая вода. */
 data class WaterEntry(val id: Long, val date: LocalDate, val time: Long, val ml: Int)
 
@@ -403,6 +430,36 @@ internal object Codec {
             githubToken = o.optString("githubToken", d.githubToken),
             themeMode = o.optString("themeMode", d.themeMode),
             themeIndex = o.optInt("themeIndex", d.themeIndex),
+        )
+    }
+
+    fun habitToJson(h: Habit): JSONObject {
+        val marks = JSONObject()
+        h.marks.forEach { (d, ok) -> marks.put(d.toString(), ok) }
+        return JSONObject()
+            .put("id", h.id).put("title", h.title).put("emoji", h.emoji).put("createdAt", h.createdAt)
+            .put("remind", h.remind).put("remindMin", h.remindMin)
+            .put("marks", marks)
+            .put("attempts", h.attempts.toJsonArray { a ->
+                JSONObject().put("start", a.start.toString()).put("end", a.end?.toString() ?: JSONObject.NULL)
+            })
+    }
+
+    fun habitFromJson(o: JSONObject): Habit {
+        val m = o.optJSONObject("marks") ?: JSONObject()
+        val marks = HashMap<LocalDate, Boolean>()
+        m.keys().forEach { k -> try { marks[LocalDate.parse(k)] = m.optBoolean(k) } catch (_: Exception) {} }
+        return Habit(
+            id = o.getLong("id"),
+            title = o.getString("title"),
+            emoji = o.optString("emoji", "🔥"),
+            createdAt = o.optLong("createdAt"),
+            remind = o.optBoolean("remind", true),
+            remindMin = o.optInt("remindMin", 21 * 60),
+            marks = marks,
+            attempts = o.optJSONArray("attempts").mapObjects { a ->
+                Attempt(LocalDate.parse(a.getString("start")), if (a.isNull("end")) null else LocalDate.parse(a.getString("end")))
+            },
         )
     }
 

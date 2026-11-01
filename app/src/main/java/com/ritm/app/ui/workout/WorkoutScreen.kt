@@ -95,12 +95,12 @@ import java.time.LocalDate
 @Composable
 fun WorkoutScreen() {
     Column(Modifier.fillMaxSize()) {
-        SubTabs(listOf("Сегодня", "Питание", "Программа", "История"), UiState.workoutSub) { UiState.workoutSub = it }
+        SubTabs(listOf("Сегодня", "Программа", "История", "Прогресс"), UiState.workoutSub) { UiState.workoutSub = it }
         when (UiState.workoutSub) {
-            0 -> TodayTab(onOpenProgram = { UiState.workoutSub = 2 })
-            1 -> FoodTab()
-            2 -> ProgramTab()
-            else -> HistoryTab()
+            0 -> TodayTab(onOpenProgram = { UiState.workoutSub = 1 })
+            1 -> ProgramTab()
+            2 -> HistoryTab()
+            else -> com.ritm.app.ui.progress.ProgressScreen()
         }
     }
 }
