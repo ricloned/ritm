@@ -178,6 +178,12 @@ data class AppSettings(
     /** cut | recomp | maintain | bulk */
     val dietGoal: String = "recomp",
     val nutritionNote: String = "",
+    /** Описание недели для расчёта расхода калорий. */
+    val weekDescription: String = "",
+    /** Расход ккал по дням недели (Пн..Вс), пусто — не считали. */
+    val burnByDay: List<Int> = emptyList(),
+    val burnBmr: Int = 0,
+    val burnComment: String = "",
     val kcalGoal: Int = 2500,
     val proteinGoal: Int = 160,
     val fatGoal: Int = 75,
@@ -386,6 +392,8 @@ internal object Codec {
         .put("updateRepo", s.updateRepo).put("githubToken", s.githubToken)
         .put("sex", s.sex).put("age", s.age).put("heightCm", s.heightCm).put("weightKg", s.weightKg)
         .put("activity", s.activity).put("dietGoal", s.dietGoal).put("nutritionNote", s.nutritionNote)
+        .put("weekDescription", s.weekDescription).put("burnBmr", s.burnBmr).put("burnComment", s.burnComment)
+        .put("burnByDay", JSONArray().also { a -> s.burnByDay.forEach { a.put(it) } })
         .put("kcalGoal", s.kcalGoal).put("proteinGoal", s.proteinGoal)
         .put("fatGoal", s.fatGoal).put("carbsGoal", s.carbsGoal).put("waterGoal", s.waterGoal)
         .put("weeklyReminder", s.weeklyReminder).put("weeklyDay", s.weeklyDay)
@@ -414,6 +422,11 @@ internal object Codec {
             activity = o.optString("activity", d.activity),
             dietGoal = o.optString("dietGoal", d.dietGoal),
             nutritionNote = o.optString("nutritionNote", d.nutritionNote),
+            weekDescription = o.optString("weekDescription", d.weekDescription),
+            burnByDay = o.optJSONArray("burnByDay")?.let { a -> (0 until a.length()).map { a.optInt(it) } }
+                ?.takeIf { it.size == 7 } ?: d.burnByDay,
+            burnBmr = o.optInt("burnBmr", d.burnBmr),
+            burnComment = o.optString("burnComment", d.burnComment),
             kcalGoal = o.optInt("kcalGoal", d.kcalGoal),
             proteinGoal = o.optInt("proteinGoal", d.proteinGoal),
             fatGoal = o.optInt("fatGoal", d.fatGoal),

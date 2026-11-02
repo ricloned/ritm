@@ -468,6 +468,7 @@ ${if (myFoods.isNotEmpty()) "\nЛичный справочник пользов�
             if (trend.isNotEmpty()) appendLine("Динамика веса: $trend.")
             if (avgKcal > 0) appendLine("Последние 7 дней в среднем съедено ≈ ${avgKcal.toInt()} ккал (по фото).")
             if (s.nutritionNote.isNotBlank()) appendLine("Пожелания и особенности: ${s.nutritionNote}")
+            if (s.burnByDay.size == 7) appendLine("Оценка расхода по дням недели (Пн..Вс): ${s.burnByDay.joinToString(", ")} ккал, в среднем ${s.burnByDay.average().toInt()}.")
         }
         val system = """
 Ты — спортивный нутрициолог. Рассчитай дневную норму калорий и БЖУ под цель пользователя.
@@ -491,6 +492,72 @@ ${if (myFoods.isNotEmpty()) "\nЛичный справочник пользов�
         val f = firstDouble(o.opt("fat")).toInt().coerceIn(20, 250)
         val c = firstDouble(o.opt("carbs")).toInt().coerceIn(0, 800)
         return NutritionPlan(com.ritm.app.data.macroKcal(p, f, c), p, f, c, o.optString("comment").trim())
+    }
+
+    // ---------------- Расход калорий ----------------
+
+    data class BurnResult(val bmr: Int, val days: List<Int>, val comment: String)
+
+    suspend fun estimateBurn(description: String): BurnResult {
+        val s = Store.settings
+        val weight = Store.checks.filter { it.weight != null }.maxByOrNull { it.date }?.weight ?: s.weightKg
+        val dayNames = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+        val program = (1..7).joinToString("\n") { d ->
+            val list = Store.program[d].orEmpty()
+            "${dayNames[d - 1]}: " + if (list.isEmpty()) "отдых" else
+                "${list.size} упр., ${list.sumOf { it.sets }} подходов: " + list.joinToString(", ") { it.name }
+        }
+        val bmr = (10 * weight + 6.25 * s.heightCm - 5 * s.age + if (s.sex == "f") -161 else 5).toInt()
+        val user = buildString {
+            appendLine("Пол: ${if (s.sex == "f") "женский" else "мужской"}, возраст ${s.age}, рост ${s.heightCm} см, вес ${num(weight)} кг.")
+            appendLine("Базовый обмен по Миффлину–Сан Жеору: $bmr ккал.")
+            appendLine()
+            appendLine("Программа силовых тренировок (круговые):")
+            appendLine(program)
+            appendLine()
+            appendLine("Как проходит моя неделя (мои слова):")
+            appendLine(description.trim())
+        }
+        val system = """
+Ты — спортивный физиолог. Оцени полный суточный расход энергии (TDEE) для КАЖДОГО дня недели:
+базовый обмен + термический эффект пищи (~10%) + бытовая активность (NEAT: работа, шаги, дорога) + тренировки и кардио.
+Силовая круговая тренировка — примерно 5–8 ккал/мин в зависимости от веса и интенсивности, бег — по весу и темпу.
+Опирайся на описание недели; если чего-то нет — бери разумное среднее. Не завышай.
+Ответь СТРОГО в формате, без markdown:
+BMR: число
+D1: число
+D2: число
+D3: число
+D4: число
+D5: число
+D6: число
+D7: число
+C: 2–3 предложения — из чего складывается расход и что сильнее всего на него влияет
+D1 = понедельник … D7 = воскресенье. Числа — ккал за сутки.
+""".trim()
+        val raw = complete(system, user, maxTokens = 500, fast = true)
+        val days = IntArray(7)
+        var outBmr = bmr
+        val comment = StringBuilder()
+        var inC = false
+        raw.lines().forEach { line ->
+            val t = line.trim().trim('*')
+            Regex("""^D\s*([1-7])\s*[:：]\s*(\d[\d\s]*)""").find(t)?.let { m ->
+                days[m.groupValues[1].toInt() - 1] = m.groupValues[2].filter { it.isDigit() }.toIntOrNull() ?: 0
+                inC = false
+                return@forEach
+            }
+            Regex("""^BMR\s*[:：]\s*(\d[\d\s]*)""", RegexOption.IGNORE_CASE).find(t)?.let { m ->
+                outBmr = m.groupValues[1].filter { it.isDigit() }.toIntOrNull() ?: bmr
+                return@forEach
+            }
+            if (Regex("""^C\s*[:：]""").containsMatchIn(t)) {
+                comment.append(t.substringAfter(':').substringAfter('：').trim())
+                inC = true
+            } else if (inC && t.isNotBlank()) comment.append(' ').append(t)
+        }
+        if (days.any { it < 1000 || it > 7000 }) throw AiException("ИИ посчитал что-то странное. Попробуй ещё раз или опиши неделю подробнее.")
+        return BurnResult(outBmr, days.toList(), comment.toString().trim())
     }
 
     // ---------------- Планировщик ----------------

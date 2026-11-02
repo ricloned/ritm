@@ -98,6 +98,7 @@ object AiJobs {
             "program" -> { UiState.programLoading = false; UiState.programError = null }
             "planner" -> { UiState.plannerLoading = false; UiState.plannerError = null }
             "nutrition" -> { UiState.nutritionLoading = false; UiState.nutritionError = null }
+            "burn" -> { UiState.burnLoading = false; UiState.burnError = null }
         }
     }
 
@@ -122,6 +123,7 @@ object AiJobs {
                 key == "planner" -> prefs().getString("plannerRequest", null)?.let { startPlanner(it) }
                 key == "program" -> prefs().getString("programRequest", null)?.let { startProgram(it) }
                 key == "nutrition" -> startNutrition()
+                key == "burn" -> startBurn()
             }
         }
     }
@@ -180,6 +182,28 @@ object AiJobs {
                 UiState.nutritionError = errText(e)
             } finally {
                 UiState.nutritionLoading = false
+            }
+        }
+    }
+
+    // ---------------- Расход калорий ----------------
+
+    fun startBurn() {
+        val desc = Store.settings.weekDescription
+        if (desc.isBlank()) return
+        UiState.burnLoading = true
+        UiState.burnError = null
+        UiState.aiStartedAt = UiState.aiStartedAt + ("burn" to System.currentTimeMillis())
+        run("burn") {
+            try {
+                val r = AiClient.estimateBurn(desc)
+                Store.updateSettings(
+                    Store.settings.copy(burnByDay = r.days, burnBmr = r.bmr, burnComment = r.comment)
+                )
+            } catch (e: Exception) {
+                UiState.burnError = errText(e)
+            } finally {
+                UiState.burnLoading = false
             }
         }
     }

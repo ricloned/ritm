@@ -190,6 +190,7 @@ fun FoodTab() {
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item(span = { GridItemSpan(maxLineSpan) }) { BurnCard(date, dayKcal) }
         item(span = { GridItemSpan(maxLineSpan) }) {
             Row(
                 Modifier

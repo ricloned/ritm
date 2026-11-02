@@ -44,6 +44,9 @@ object UiState {
     /** Когда стартовал запрос ИИ (для таймера на кнопке). */
     var aiStartedAt by mutableStateOf(mapOf<String, Long>())
 
+    var burnLoading by mutableStateOf(false)
+    var burnError by mutableStateOf<String?>(null)
+
     var nutritionLoading by mutableStateOf(false)
     var nutritionError by mutableStateOf<String?>(null)
     var nutritionComment by mutableStateOf<String?>(null)
