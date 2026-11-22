@@ -1,5 +1,8 @@
 package com.ritm.app.ui.workout
 
+import com.ritm.app.data.exerciseNames
+import java.time.LocalDate
+
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -100,14 +103,16 @@ fun tonnageOf(exercises: List<ExerciseLog>): Tonnage {
     return Tonnage(total, sets, reps, groups.entries.sortedByDescending { it.value }.map { it.key to it.value })
 }
 
-/** Прошлая тренировка с теми же упражнениями — для сравнения. */
-fun previousSimilar(log: WorkoutLog): WorkoutLog? {
-    val names = log.exercises.map { it.name.lowercase() }.toSet()
-    return Store.logs
-        .filter { it.id != log.id && it.finishedAt < log.finishedAt }
-        .map { it to it.exercises.count { e -> e.name.lowercase() in names } }
-        .filter { it.second >= maxOf(2, names.size / 2) }
-        .maxByOrNull { it.first.finishedAt }?.first
+/** Сравниваем тоннаж при одинаковом составе выполненных упражнений. */
+fun previousSimilar(log: WorkoutLog): WorkoutLog? =
+    previousMatching(log.exerciseNames(), log.date, log.finishedAt)
+
+internal fun previousMatching(names: Set<String>, date: LocalDate, finishedAt: Long): WorkoutLog? {
+    if (names.isEmpty()) return null
+    return Store.logs.asSequence()
+        .filter { it.date < date || (it.date == date && it.finishedAt < finishedAt) }
+        .filter { it.exerciseNames() == names }
+        .maxWithOrNull(compareBy<WorkoutLog> { it.date }.thenBy { it.finishedAt })
 }
 
 fun kgText(v: Double): String = String.format(Locale.forLanguageTag("ru"), "%,d", Math.round(v))

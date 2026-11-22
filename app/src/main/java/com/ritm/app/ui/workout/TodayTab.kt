@@ -27,6 +27,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -43,6 +45,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -75,6 +79,8 @@ import com.ritm.app.data.SetEntry
 import com.ritm.app.data.Store
 import com.ritm.app.data.WorkoutLog
 import com.ritm.app.data.lineText
+import com.ritm.app.data.exerciseHistory
+import com.ritm.app.data.exerciseNames
 import com.ritm.app.data.toText
 import com.ritm.app.ui.EmptyState
 import com.ritm.app.ui.SoftCard
@@ -106,13 +112,13 @@ fun TodayTab(onOpenProgram: () -> Unit) {
             confirmButton = {
                 Button(onClick = {
                     askUnticked = 0
-                    if (Store.finishWorkout(today, exercises, includeUnticked = true) != null) UiState.workoutAgain = false
+                    if (Store.finishWorkout(today, exercises, includeUnticked = true, programDay = programDay) != null) UiState.workoutAgain = false
                 }) { Text("Засчитать") }
             },
             dismissButton = {
                 TextButton(onClick = {
                     askUnticked = 0
-                    if (Store.finishWorkout(today, exercises) == null) {
+                    if (Store.finishWorkout(today, exercises, programDay = programDay) == null) {
                         Toast.makeText(ctx, "Отметь галочкой хотя бы один подход", Toast.LENGTH_SHORT).show()
                     } else UiState.workoutAgain = false
                 }) { Text("Только отмеченные") }
@@ -127,9 +133,14 @@ fun TodayTab(onOpenProgram: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
+                val finishedDay = todayLog.programDay.takeIf { it in 1..7 } ?: todayLog.date.dayOfWeek.value
+                val program = Store.program[finishedDay].orEmpty()
+                if (program.isNotEmpty()) WorkoutCoach(today, finishedDay, program, afterWorkout = true)
+            }
+            item {
                 SoftCard {
                     Text(
-                        "День ${todayLog.dayNumber} завершён 🎉",
+                        "День ${todayLog.dayNumber} завершён",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -157,134 +168,141 @@ fun TodayTab(onOpenProgram: () -> Unit) {
     val doneSets = allSets.sumOf { l -> l.count { it.done } }
     val totalSets = allSets.sumOf { it.size }
 
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 32.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item(key = "header") {
-            Column {
-                Text(
-                    "День ${Store.nextDayNumber()} · ${DayOfWeek.of(programDay).fullRu()}",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    if (exercises.isEmpty()) today.dayTitle()
-                    else "${today.dayTitle()} · ${exercises.size} упр. · кругов $rounds · готово $doneSets из $totalSets",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant
-                )
-                Spacer(Modifier.height(10.dp))
-                DayChips(selected = programDay, todayDay = today.dayOfWeek.value) { UiState.todayProgramDay = it }
-            }
-        }
-
-        // живой тоннаж по уже сделанным подходам
-        val liveLogs = exercises.map { ex ->
-            val filled = Store.setsFor(today, ex).mapIndexedNotNull { i, set ->
-                if (!set.done && set.reps.isBlank()) return@mapIndexedNotNull null
-                val (hw, hr) = Store.hint(ex, i)
-                set.copy(weight = set.weight.ifBlank { if (set.done) hw else "" }, reps = set.reps.ifBlank { hr })
-            }
-            com.ritm.app.data.ExerciseLog(ex.name, ex.sets, ex.reps, ex.weight, filled)
-        }
-        val live = tonnageOf(liveLogs)
-        if (live.sets > 0) {
-            item(key = "liveTonnage") {
-                val names = exercises.map { it.name.lowercase() }.toSet()
-                val prev = Store.logs
-                    .filter { l -> l.exercises.count { it.name.lowercase() in names } >= maxOf(2, names.size / 2) }
-                    .maxByOrNull { it.finishedAt }
-                TonnageCard(live, prev?.let { tonnageOf(it.exercises) }, live = true)
-            }
-        }
-
-        if (exercises.isEmpty()) {
-            item(key = "rest") {
-                EmptyState(
-                    "😌",
-                    "В этот день отдых",
-                    "Выбери другой день программы выше или настрой программу.",
-                ) {
-                    Button(onClick = onOpenProgram) { Text("Открыть программу") }
-                }
-            }
-            return@LazyColumn
-        }
-
-        for (r in 0 until mainRounds) {
-            item(key = "round$r") {
-                RoundCard("Круг ${r + 1}", r, mainExercises.filter { Store.setsFor(today, it).size > r })
-            }
-        }
-        if (finishers.isNotEmpty()) {
-            item(key = "finish_block") {
-                RoundCard("Финиш", 0, finishers)
-            }
-        }
-
-        item(key = "roundButtons") {
-            val delta = Store.roundDelta(today)
-            Column {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(
-                        onClick = { Store.removeRound(today, mainExercises) },
-                        enabled = mainRounds > 1,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(Icons.Rounded.Remove, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Круг")
-                    }
-                    FilledTonalButton(
-                        onClick = { Store.addRound(today, mainExercises) },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Круг")
-                    }
-                }
-                if (delta != 0) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxSize()) {
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item(key = "header") {
+                Column {
+                    Text(
+                        "День ${Store.nextDayNumber()}",
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        if (exercises.isEmpty()) today.dayTitle()
+                        else "${DayOfWeek.of(programDay).fullRu()} · ${exercises.size} упр. · кругов $rounds",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = cs.onSurfaceVariant
+                    )
+                    if (totalSets > 0) {
                         Text(
-                            (if (delta > 0) "+$delta" else "$delta") + " к плану у каждого упражнения",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f)
+                            "$doneSets из $totalSets подходов",
+                            modifier = Modifier.padding(top = 12.dp, bottom = 6.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = cs.onSurfaceVariant,
                         )
-                        TextButton(onClick = { Store.resetRounds(today) }) { Text("Как по плану") }
+                        LinearProgressIndicator(
+                            progress = { doneSets.toFloat() / totalSets },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
+                    Spacer(Modifier.height(12.dp))
+                    DayChips(selected = programDay, todayDay = today.dayOfWeek.value) { UiState.todayProgramDay = it }
                 }
             }
-        }
 
-        item(key = "finish") {
-            Button(
-                onClick = {
-                    val unticked = Store.untickedFilled(today, exercises)
-                    if (unticked > 0) {
-                        askUnticked = unticked
-                    } else {
-                        val log = Store.finishWorkout(today, exercises)
-                        if (log == null) {
-                            Toast.makeText(ctx, "Отметь галочкой хотя бы один подход", Toast.LENGTH_SHORT).show()
-                        } else {
-                            UiState.workoutAgain = false
+            if (exercises.isEmpty()) {
+                item(key = "rest") {
+                    EmptyState(
+                        "😌",
+                        "В этот день отдых",
+                        "Выбери другой день программы выше или настрой программу.",
+                    ) {
+                        Button(onClick = onOpenProgram) { Text("Открыть программу") }
+                    }
+                }
+                return@LazyColumn
+            }
+
+            if (doneSets == 0) {
+                item(key = "coach") { WorkoutCoach(today, programDay, exercises) }
+            }
+
+            for (r in 0 until mainRounds) {
+                item(key = "round$r") {
+                    RoundCard("Круг ${r + 1}", r, mainExercises.filter { Store.setsFor(today, it).size > r })
+                }
+            }
+            if (finishers.isNotEmpty()) {
+                item(key = "finish_block") {
+                    RoundCard("Финиш", 0, finishers)
+                }
+            }
+
+            item(key = "roundButtons") {
+                val delta = Store.roundDelta(today)
+                Column {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = { Store.removeRound(today, mainExercises) },
+                            enabled = mainRounds > 1,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(Icons.Rounded.Remove, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Круг")
+                        }
+                        FilledTonalButton(
+                            onClick = { Store.addRound(today, mainExercises) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Круг")
                         }
                     }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Icon(Icons.Rounded.AutoAwesome, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Завершить и получить отчёт")
+                    if (delta != 0) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                (if (delta > 0) "+$delta" else "$delta") + " к плану у каждого упражнения",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(onClick = { Store.resetRounds(today) }) { Text("Как по плану") }
+                        }
+                    }
+                }
+            }
+
+            item(key = "liveTonnage") {
+                val liveLogs = exercises.map { ex ->
+                    val completed = Store.setsFor(today, ex).filter { it.done }
+                    com.ritm.app.data.ExerciseLog(ex.name, ex.sets, ex.reps, Store.workoutWeight(today, ex), completed)
+                }
+                val live = tonnageOf(liveLogs)
+                if (live.sets > 0) {
+                    val names = WorkoutLog(0, today, liveLogs).exerciseNames()
+                    val previous = previousMatching(names, today, Long.MAX_VALUE)
+                    TonnageCard(live, previous?.let { tonnageOf(it.exercises) }, live = true)
+                }
+            }
+        }
+        if (exercises.isNotEmpty()) {
+            Surface(color = cs.background, tonalElevation = 2.dp) {
+                Button(
+                    onClick = {
+                        val unticked = Store.untickedFilled(today, exercises)
+                        if (unticked > 0) {
+                            askUnticked = unticked
+                        } else {
+                            val log = Store.finishWorkout(today, exercises, programDay = programDay)
+                            if (log == null) {
+                                Toast.makeText(ctx, "Отметь галочкой хотя бы один подход", Toast.LENGTH_SHORT).show()
+                            } else {
+                                UiState.workoutAgain = false
+                            }
+                        }
+                    },
+                    enabled = doneSets > 0 || allSets.any { group -> group.any { it.reps.isNotBlank() } },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).height(52.dp),
+                    shape = RoundedCornerShape(16.dp),
+                ) { Text("Завершить тренировку") }
             }
         }
     }
@@ -333,8 +351,20 @@ private fun RoundCard(title: String, round: Int, exercises: List<Exercise>) {
     val cs = MaterialTheme.colorScheme
     val today = UiState.today
     val done = exercises.count { Store.setsFor(today, it).getOrNull(round)?.done == true }
+    val complete = done == exercises.size
+    var collapseOverride by remember(today, UiState.todayProgramDay, title) { mutableStateOf<Boolean?>(null) }
+    val collapsed = collapseOverride ?: complete
     SoftCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { collapseOverride = !collapsed }.heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (collapsed) Icons.Rounded.ExpandMore else Icons.Rounded.ExpandLess,
+                contentDescription = if (collapsed) "Развернуть" else "Свернуть",
+                modifier = Modifier.padding(end = 8.dp),
+                tint = cs.onSurfaceVariant,
+            )
             Text(
                 title,
                 style = MaterialTheme.typography.titleLarge,
@@ -355,7 +385,7 @@ private fun RoundCard(title: String, round: Int, exercises: List<Exercise>) {
                 )
             }
         }
-        exercises.forEachIndexed { i, ex ->
+        if (!collapsed) exercises.forEachIndexed { i, ex ->
             if (i > 0) HorizontalDivider(Modifier.padding(vertical = 10.dp), color = cs.outlineVariant)
             else Spacer(Modifier.height(10.dp))
             ExerciseInRound(ex, round)
@@ -368,7 +398,16 @@ private fun ExerciseInRound(ex: Exercise, round: Int) {
     val cs = MaterialTheme.colorScheme
     val today = UiState.today
     val set = Store.setsFor(today, ex).getOrNull(round) ?: SetEntry()
-    val (hintW, hintR) = Store.hint(ex, round)
+    val hintW = Store.workoutWeightHint(today, ex)
+    val hintR = ex.reps.toString()
+    var showHistory by remember(today, ex.id) { mutableStateOf(false) }
+    val logs = Store.logs
+    val history = remember(logs, ex.id, ex.name) { exerciseHistory(logs, ex.id, ex.name) }
+    val previous = history.firstOrNull()?.exercise
+    val previousSet = previous?.let { record ->
+        record.sets.indices.firstOrNull { record.setRound(it) == round + 1 }?.let { record.sets[it] }
+    }
+    if (showHistory) ExerciseHistoryDialog(ex.name, history) { showHistory = false }
 
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -376,7 +415,7 @@ private fun ExerciseInRound(ex: Exercise, round: Int) {
                 ex.name,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).clickable { showHistory = true }.padding(vertical = 8.dp)
             )
             IconButton(
                 onClick = {
@@ -390,7 +429,7 @@ private fun ExerciseInRound(ex: Exercise, round: Int) {
                     if (next.weight != set.weight) Store.setWeight(today, ex, round, next.weight)
                     Store.updateSet(today, ex, round, next)
                 },
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     if (set.done) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
@@ -400,6 +439,12 @@ private fun ExerciseInRound(ex: Exercise, round: Int) {
                 )
             }
         }
+        Text(
+            "Цель ${if (hintW.isBlank()) "$hintR повт." else "$hintW кг × $hintR"}" +
+                (previousSet?.takeIf { it.reps.isNotBlank() }?.let { " · Было ${it.lineText()}" } ?: ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+        )
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CompactField(
@@ -446,7 +491,7 @@ private fun CompactField(
     onChange: (String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val style = (if (small) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium)
+    val style = (if (small) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleLarge)
         .copy(color = cs.onSurface)
     BasicTextField(
         value = value,
@@ -488,13 +533,16 @@ fun LogContent(log: WorkoutLog) {
     val maxTarget = log.exercises.maxOfOrNull { it.targetSets } ?: 0
     val main = log.exercises.filter { !com.ritm.app.data.isFinisher(it.targetSets, maxTarget) }
     val finish = log.exercises.filter { com.ritm.app.data.isFinisher(it.targetSets, maxTarget) && it.sets.isNotEmpty() }
-    val rounds = main.maxOfOrNull { it.sets.size } ?: 0
+    val rounds = main.maxOfOrNull { it.lastRound() } ?: 0
     Column {
         for (r in 0 until rounds) {
-            LogSection("Круг ${r + 1}", r == 0, main.mapNotNull { e ->
-                val ei = log.exercises.indexOfFirst { it === e }
-                e.sets.getOrNull(r)?.let { LogRow(e.name, it) { Store.removeLogSet(log.id, ei, r) } }
-            })
+            val rows = main.mapNotNull { e ->
+                val exerciseIndex = log.exercises.indexOfFirst { it === e }
+                e.sets.indices.firstOrNull { e.setRound(it) == r + 1 }?.let { setIndex ->
+                    LogRow(e.name, e.sets[setIndex]) { Store.removeLogSet(log.id, exerciseIndex, setIndex) }
+                }
+            }
+            if (rows.isNotEmpty()) LogSection("Круг ${r + 1}", r == 0, rows)
         }
         if (finish.isNotEmpty()) {
             LogSection("Финиш", rounds == 0, finish.flatMap { e ->

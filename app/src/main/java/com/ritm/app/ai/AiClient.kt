@@ -5,6 +5,7 @@ import com.ritm.app.data.ExerciseLog
 import com.ritm.app.data.Store
 import com.ritm.app.data.WorkoutLog
 import com.ritm.app.data.toText
+import com.ritm.app.data.exerciseHistorySummary
 import com.ritm.app.data.maintenanceKcal
 import com.ritm.app.data.isAnthropicFormat
 import kotlinx.coroutines.Dispatchers
@@ -636,13 +637,15 @@ $calendar
     }
 
     private fun planText(log: WorkoutLog): String = log.exercises.joinToString("\n") { e ->
-        val done = e.sets.size
+        val done = e.sets.count { it.reps.isNotBlank() }
         val status = when {
             done == 0 -> "не делал"
-            done < e.targetSets -> "сделал $done из ${e.targetSets}"
+            done < e.plannedSets -> "сделал $done из ${e.plannedSets}"
             else -> "выполнено"
         }
-        "- ${e.name}: по плану ${e.targetSets} ${com.ritm.app.data.roundsWord(e.targetSets)} — $status"
+        val adjusted = if (e.targetSets != e.plannedSets) " (по программе ${e.targetSets})" else ""
+        "- ${e.name}: план занятия ${e.plannedSets}$adjusted, ${e.targetReps} повт." +
+            (if (e.targetWeight > 0) ", ${num(e.targetWeight)} кг" else "") + " — $status"
     }
 
     private val TRAINER_RULES = """
@@ -651,10 +654,18 @@ $calendar
 Поэтому поздние круги короче — это НОРМАЛЬНО и задумано программой. Никогда не называй это «оборвался», «недоделал» или «не хватило сил».
 Недоделкой считается только то, что прямо помечено «сделал X из Y» или «не делал».
 Формат записи: «Упражнение 75кг на 15 (комментарий)». Цель пользователя — рекомпозиция: мышцы и рост рабочих весов при сжигании жира;
-базовые упражнения он делает на 8–9 повторений в первом круге, прибавляет вес, когда во всех кругах выходит 10.
+прогрессия проверяется по заданному порогу повторов и шагу веса в настройках упражнения.
 """.trim()
 
-    suspend fun workoutReport(log: WorkoutLog, previous: WorkoutLog?): String {
+    private fun StringBuilder.appendTrainerNotes() {
+        Store.trainerNotes.takeIf { it.isNotBlank() }?.let {
+            appendLine()
+            appendLine("Заметки пользователя для тренера об оборудовании, целях и ограничениях:")
+            appendLine(it)
+        }
+    }
+
+    suspend fun workoutReport(log: WorkoutLog, history: String): String {
         val fmt = DateTimeFormatter.ofPattern("d MMMM yyyy, EEEE", RU)
         val user = buildString {
             appendLine("Сегодняшняя тренировка (${log.date.format(fmt)}):")
@@ -662,19 +673,18 @@ $calendar
             appendLine()
             appendLine("План по кругам и выполнение:")
             appendLine(planText(log))
-            if (previous != null) {
-                appendLine()
-                appendLine("Прошлая похожая тренировка (${previous.date.format(fmt)}):")
-                appendLine(previous.toText())
-            }
+            appendLine()
+            appendLine("Предыдущие результаты по каждому упражнению:")
+            appendLine(history)
+            appendTrainerNotes()
         }
         val system = """
 Ты — дружелюбный персональный тренер.
 $TRAINER_RULES
 
 Напиши КРАТКИЙ отчёт на русском: 3–6 коротких предложений. Отметь, что получилось, как падают повторения от круга к кругу,
-сравни с прошлой тренировкой (если есть) — где прогресс в весе или повторениях. Учти комментарии пользователя.
-Дай 1–2 конкретных совета на следующую тренировку (где поднять вес, где остаться).
+сравни одинаковые упражнения и круги по истории. Учти комментарии пользователя.
+Дай 1–2 конкретных совета на следующую тренировку. Не придумывай шаг веса. При недостатке данных предложи проверить повторы и технику.
 Пиши обычным текстом, без markdown и заголовков. Можно 1–2 эмодзи.
 """.trim()
         return complete(system, user, maxTokens = 800)
@@ -683,7 +693,6 @@ $TRAINER_RULES
     /** Ответ тренера в чате по конкретной тренировке. */
     suspend fun trainerChat(log: WorkoutLog, history: List<Pair<String, String>>): String {
         val fmt = DateTimeFormatter.ofPattern("d MMMM yyyy, EEEE", RU)
-        val recent = Store.logs.filter { it.id != log.id }.sortedByDescending { it.finishedAt }.take(3)
         val system = buildString {
             appendLine("Ты — опытный персональный тренер, общаешься с подопечным в чате. Отвечай по-русски, по делу, коротко (до 6–8 предложений), без markdown.")
             appendLine("Если подопечный поправляет тебя — признай ошибку просто и спокойно и исправь вывод.")
@@ -698,11 +707,10 @@ $TRAINER_RULES
             appendLine()
             appendLine("Текущая программа:")
             appendLine(com.ritm.app.data.programToText(Store.program))
-            if (recent.isNotEmpty()) {
-                appendLine()
-                appendLine("Другие последние тренировки:")
-                recent.forEach { appendLine(); appendLine(it.toText()) }
-            }
+            appendLine()
+            appendLine("Предыдущие результаты по тем же упражнениям:")
+            appendLine(exerciseHistorySummary(Store.logs, log))
+            appendTrainerNotes()
         }
         return completeChat(system, history, maxTokens = 1000)
     }
@@ -763,6 +771,7 @@ D1 = понедельник … D7 = воскресенье. Порядок уп
         val lastWeight = Store.checks.filter { it.weight != null }.maxByOrNull { it.date }?.weight ?: st.weightKg
         val fullRequest = buildString {
             appendLine(request)
+            appendTrainerNotes()
             appendLine()
             appendLine(
                 "Обо мне (из настроек приложения): ${if (st.sex == "f") "женщина" else "мужчина"}, ${st.age} лет, " +

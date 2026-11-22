@@ -123,6 +123,31 @@ private fun ProgramTab() {
     var adding by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Exercise?>(null) }
+    var editTrainerNotes by remember { mutableStateOf(false) }
+    if (editTrainerNotes) {
+        var notes by remember { mutableStateOf(Store.trainerNotes) }
+        AlertDialog(
+            onDismissRequest = { editTrainerNotes = false },
+            title = { Text("Заметки для тренера") },
+            text = {
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it.take(1200) },
+                    label = { Text("Цели, оборудование, ограничения") },
+                    minLines = 3,
+                    maxLines = 6,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    Store.updateTrainerNotes(notes)
+                    editTrainerNotes = false
+                }) { Text("Сохранить") }
+            },
+            dismissButton = { TextButton(onClick = { editTrainerNotes = false }) { Text("Отмена") } },
+        )
+    }
     val list = Store.program[day].orEmpty()
 
     Box(Modifier.fillMaxSize()) {
@@ -138,6 +163,7 @@ private fun ProgramTab() {
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    Pill("Заметки для тренера", selected = false) { editTrainerNotes = true }
                     Pill("📋 Скопировать программу", selected = false) {
                         clipboard.setText(AnnotatedString(programToText(Store.program)))
                         Toast.makeText(ctx, "Программа скопирована", Toast.LENGTH_SHORT).show()
@@ -279,6 +305,9 @@ private fun ExerciseDialog(initial: Exercise?, onDismiss: () -> Unit, onSave: (E
     var reps by remember { mutableStateOf(initial?.reps?.toString() ?: "10") }
     var weight by remember { mutableStateOf(initial?.weight?.takeIf { it > 0 }?.let { fmtNum(it) } ?: "") }
 
+    var progressionReps by remember { mutableStateOf((initial?.progressionReps ?: 10).toString()) }
+    var weightStep by remember { mutableStateOf(initial?.weightStep?.takeIf { it > 0 }?.let { fmtNum(it) }.orEmpty()) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "Новое упражнение" else "Упражнение") },
@@ -322,6 +351,32 @@ private fun ExerciseDialog(initial: Exercise?, onDismiss: () -> Unit, onSave: (E
                         shape = RoundedCornerShape(14.dp),
                     )
                 }
+                if ((weight.toDoubleOrNull() ?: 0.0) > 0) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = progressionReps,
+                            onValueChange = { progressionReps = it.filter(Char::isDigit).take(3) },
+                            label = { Text("Порог повторов") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = weightStep,
+                            onValueChange = { value ->
+                                weightStep = value.replace(',', '.').filter { it.isDigit() || it == '.' }.take(6)
+                            },
+                            label = { Text("Шаг веса, кг") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Text(
+                        "Прибавка доступна, когда порог достигнут во всех кругах. Пустой шаг отключает прибавку.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Text(
                     "Тренировка идёт кругами: каждое упражнение повторяется в каждом круге. Вес можно оставить пустым (брусья, подтягивания).",
                     style = MaterialTheme.typography.bodySmall,
@@ -339,6 +394,8 @@ private fun ExerciseDialog(initial: Exercise?, onDismiss: () -> Unit, onSave: (E
                             sets = (sets.toIntOrNull() ?: 3).coerceIn(1, 20),
                             reps = (reps.toIntOrNull() ?: 10).coerceAtLeast(1),
                             weight = weight.toDoubleOrNull() ?: 0.0,
+                            progressionReps = progressionReps.toIntOrNull()?.coerceAtLeast(1) ?: 10,
+                            weightStep = weightStep.toDoubleOrNull() ?: 0.0,
                         )
                     )
                 },

@@ -57,6 +57,8 @@ object Store {
         private set
     var programDraft by mutableStateOf("")
         private set
+    var trainerNotes by mutableStateOf("")
+        private set
 
     var reportLoading by mutableStateOf(setOf<Long>())
         private set
@@ -111,6 +113,7 @@ object Store {
             }
             plannerDraft = o.optString("plannerDraft", "")
             programDraft = o.optString("programDraft", "")
+            trainerNotes = o.optString("trainerNotes", "")
         } catch (_: Exception) {
             // повреждённый файл — сохраним копию, чтобы не потерять данные
             try {
@@ -139,6 +142,7 @@ object Store {
                 .put("settings", Codec.settingsToJson(settings))
                 .put("plannerDraft", plannerDraft)
                 .put("programDraft", programDraft)
+                .put("trainerNotes", trainerNotes)
                 .toString()
         } catch (_: Exception) {
             return
@@ -256,17 +260,25 @@ object Store {
         return List(roundsFor(date, ex)) { raw.getOrNull(it) ?: SetEntry() }
     }
 
-    /** Подсказка для круга: что было в прошлый раз в этом упражнении, иначе цель из программы. */
-    fun hint(ex: Exercise, round: Int): Pair<String, String> {
-        val prev = logs.asSequence()
-            .sortedByDescending { it.finishedAt }
-            .mapNotNull { l -> l.exercises.firstOrNull { it.name.equals(ex.name, ignoreCase = true) && it.sets.isNotEmpty() } }
-            .firstOrNull()
-        val set = prev?.sets?.getOrNull(round) ?: prev?.sets?.lastOrNull()
-        val w = set?.weight?.takeIf { it.isNotBlank() } ?: if (ex.weight > 0) numText(ex.weight) else ""
-        val r = set?.reps?.takeIf { it.isNotBlank() } ?: ex.reps.toString()
-        return w to r
+    fun workoutWeight(date: LocalDate, ex: Exercise): Double =
+        draftFor(date)?.weightOverrides?.get(ex.id) ?: ex.weight
+
+    fun canSetWorkoutWeight(date: LocalDate, ex: Exercise): Boolean =
+        rawSets(date, ex).none { it.done || it.weight.isNotBlank() || it.reps.isNotBlank() }
+
+    fun setWorkoutWeight(date: LocalDate, ex: Exercise, weight: Double?): Boolean {
+        if (!canSetWorkoutWeight(date, ex)) return false
+        if (weight != null && (!weight.isFinite() || weight <= 0)) return false
+        val current = draftFor(date) ?: WorkoutDraft(date, emptyMap())
+        val weights = if (weight == null) current.weightOverrides - ex.id
+        else current.weightOverrides + (ex.id to weight)
+        draft = current.copy(weightOverrides = weights)
+        save()
+        return true
     }
+
+    fun workoutWeightHint(date: LocalDate, ex: Exercise): String =
+        workoutWeight(date, ex).takeIf { it > 0 }?.let(::numText).orEmpty()
 
     private fun putSets(date: LocalDate, ex: Exercise, list: List<SetEntry>) {
         val cur = draftFor(date) ?: WorkoutDraft(date, emptyMap())
@@ -348,22 +360,28 @@ object Store {
      * [includeUnticked] — ещё и те, где вручную вписаны повторы (по выбору пользователя).
      * Подход, где только перенесённый вес, не засчитывается никогда.
      */
-    fun finishWorkout(date: LocalDate, exercises: List<Exercise>, includeUnticked: Boolean = false): WorkoutLog? {
+    fun finishWorkout(
+        date: LocalDate,
+        exercises: List<Exercise>,
+        includeUnticked: Boolean = false,
+        programDay: Int = 0,
+    ): WorkoutLog? {
         val logged = exercises.map { ex ->
             val sets = setsFor(date, ex).mapIndexedNotNull { i, s ->
                 val counts = s.done || (includeUnticked && s.reps.isNotBlank())
                 if (!counts) return@mapIndexedNotNull null
-                val (hw, hr) = hint(ex, i)
+                val hw = workoutWeightHint(date, ex)
                 s.copy(
-                    reps = s.reps.ifBlank { hr },
+                    reps = s.reps.ifBlank { ex.reps.toString() },
                     weight = if (s.weight.isBlank() && s.done) hw else s.weight,
                     done = true,
+                    round = i + 1,
                 )
             }
-            ExerciseLog(ex.name, ex.sets, ex.reps, ex.weight, sets)
+            ExerciseLog(ex.name, ex.sets, ex.reps, workoutWeight(date, ex), sets, roundsFor(date, ex), ex.id)
         }
         if (logged.all { it.sets.isEmpty() }) return null
-        val log = WorkoutLog(id = newId(), date = date, exercises = logged, dayNumber = nextDayNumber())
+        val log = WorkoutLog(id = newId(), date = date, exercises = logged, dayNumber = nextDayNumber(), programDay = programDay)
         logs = listOf(log) + logs
         draft = null
         save()
@@ -496,15 +514,10 @@ object Store {
         if (logId in reportLoading) return
         reportLoading = reportLoading + logId
         reportErrors = reportErrors - logId
-        val previous = logs
-            .filter { it.id != logId && it.finishedAt < log.finishedAt }
-            .let { older ->
-                older.filter { it.date.dayOfWeek == log.date.dayOfWeek }.maxByOrNull { it.finishedAt }
-                    ?: older.maxByOrNull { it.finishedAt }
-            }
+        val history = exerciseHistorySummary(logs, log)
         AiJobs.run("report:$logId") {
             try {
-                val text = AiClient.workoutReport(log, previous)
+                val text = AiClient.workoutReport(log, history)
                 logs = logs.map { if (it.id == logId) it.copy(report = text) else it }
                 save()
             } catch (e: Exception) {
@@ -801,6 +814,11 @@ object Store {
         save()
     }
 
+    fun updateTrainerNotes(text: String) {
+        trainerNotes = text.trim().take(1200)
+        save()
+    }
+
     fun updateProgramDraft(text: String) {
         programDraft = text
         save()
@@ -823,7 +841,7 @@ object Store {
 
     // ---------------- Темы ----------------
 
-    const val THEME_COUNT = 7
+    const val THEME_COUNT = 8
 
     /** Индекс темы с учётом режима: фиксированная, каждый день новая, каждый заход новая. */
     fun themeIndexFor(date: LocalDate): Int = when (settings.themeMode) {

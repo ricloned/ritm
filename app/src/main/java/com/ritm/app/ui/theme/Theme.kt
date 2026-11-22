@@ -11,6 +11,8 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
 import com.ritm.app.data.Store
 import com.ritm.app.ui.UiState
 
@@ -25,14 +27,58 @@ val THEMES = listOf(
     AppTheme("Мята", "🌿", 160f, 0.75f),
     AppTheme("Небо", "☁️", 205f, 0.85f),
     AppTheme("Индиго", "🌙", 232f),
+    AppTheme("Графит", "●", 82f),
 )
 
 private fun hsl(h: Float, s: Float, l: Float): Color =
     Color.hsl(((h % 360f) + 360f) % 360f, s.coerceIn(0f, 1f), l.coerceIn(0f, 1f))
 
-fun previewColor(t: AppTheme): Color = hsl(t.hue, 0.48f * t.sat, 0.6f)
+private val GraphiteLight = lightColorScheme(
+    primary = Color(0xFF3B590E),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFE4EDCC),
+    onPrimaryContainer = Color(0xFF23340C),
+    background = Color(0xFFF8F8F3),
+    onBackground = Color(0xFF20221D),
+    surface = Color.White,
+    surfaceVariant = Color(0xFFEDEFE6),
+    onSurfaceVariant = Color(0xFF4C5047),
+    secondary = Color(0xFF54613F),
+    secondaryContainer = Color(0xFFE3EAD7),
+    onSecondaryContainer = Color(0xFF202914),
+    tertiary = Color(0xFF3C6255),
+    tertiaryContainer = Color(0xFFDCECE5),
+    onTertiaryContainer = Color(0xFF19382D),
+    outline = Color(0xFF787D70),
+    outlineVariant = Color(0xFFD9DDD1),
+)
+
+private val GraphiteDark = darkColorScheme(
+    primary = Color(0xFFD7F885),
+    onPrimary = Color(0xFF203000),
+    primaryContainer = Color(0xFF2B381D),
+    onPrimaryContainer = Color(0xFFE5F7C5),
+    background = Color(0xFF141613),
+    onBackground = Color(0xFFF0F2EA),
+    surface = Color(0xFF1E211C),
+    onSurface = Color(0xFFF0F2EA),
+    surfaceVariant = Color(0xFF2A2E26),
+    onSurfaceVariant = Color(0xFFBFC6B6),
+    secondary = Color(0xFFBFCEA8),
+    secondaryContainer = Color(0xFF343E2D),
+    onSecondaryContainer = Color(0xFFE0EAD7),
+    tertiary = Color(0xFFA8D0BF),
+    tertiaryContainer = Color(0xFF2A4238),
+    onTertiaryContainer = Color(0xFFDBEFE5),
+    outline = Color(0xFF878E81),
+    outlineVariant = Color(0xFF393F36),
+)
+
+fun previewColor(t: AppTheme): Color =
+    if (t == THEMES.last()) GraphiteDark.primary else hsl(t.hue, 0.48f * t.sat, 0.6f)
 
 fun lightSchemeFor(t: AppTheme): ColorScheme {
+    if (t == THEMES.last()) return GraphiteLight
     val h = t.hue
     val k = t.sat
     val h2 = h + 35f
@@ -70,6 +116,7 @@ fun lightSchemeFor(t: AppTheme): ColorScheme {
 }
 
 fun darkSchemeFor(t: AppTheme): ColorScheme {
+    if (t == THEMES.last()) return GraphiteDark
     val h = t.hue
     val k = t.sat
     val h2 = h + 35f
@@ -114,13 +161,20 @@ private val AppShapes = Shapes(
     extraLarge = RoundedCornerShape(28.dp),
 )
 
+private val BaseTypography = Typography()
+private val RitmTypography = Typography(
+    headlineLarge = BaseTypography.headlineLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.9).sp),
+    titleLarge = BaseTypography.titleLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = (-0.35).sp),
+    titleMedium = BaseTypography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+)
+
 @Composable
 fun RitmTheme(content: @Composable () -> Unit) {
     val theme = THEMES[Store.themeIndexFor(UiState.today).coerceIn(0, THEMES.size - 1)]
     MaterialTheme(
         colorScheme = if (isSystemInDarkTheme()) darkSchemeFor(theme) else lightSchemeFor(theme),
         shapes = AppShapes,
-        typography = Typography(),
+        typography = RitmTypography,
         content = content,
     )
 }

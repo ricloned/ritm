@@ -22,6 +22,8 @@ data class Exercise(
     val sets: Int,
     val reps: Int,
     val weight: Double,
+    val progressionReps: Int = 10,
+    val weightStep: Double = 0.0,
 )
 
 data class SetEntry(
@@ -29,6 +31,7 @@ data class SetEntry(
     val weight: String = "",
     val done: Boolean = false,
     val comment: String = "",
+    val round: Int = 0,
 )
 
 data class ExerciseLog(
@@ -37,7 +40,12 @@ data class ExerciseLog(
     val targetReps: Int,
     val targetWeight: Double,
     val sets: List<SetEntry>,
-)
+    val plannedSets: Int = targetSets,
+    val exerciseId: Long = 0,
+) {
+    fun setRound(index: Int): Int = sets[index].round.takeIf { it > 0 } ?: index + 1
+    fun lastRound(): Int = sets.indices.maxOfOrNull(::setRound) ?: 0
+}
 
 data class WorkoutLog(
     val id: Long,
@@ -47,6 +55,7 @@ data class WorkoutLog(
     val finishedAt: Long = System.currentTimeMillis(),
     val dayNumber: Int = 0,
     val chat: List<ChatMsg> = emptyList(),
+    val programDay: Int = 0,
 )
 
 data class ChatMsg(val role: String, val text: String)
@@ -56,6 +65,7 @@ data class WorkoutDraft(
     val sets: Map<Long, List<SetEntry>>,
     /** Сколько кругов добавлено (+) или убрано (−) относительно плана — одинаково для всех упражнений. */
     val roundDelta: Int = 0,
+    val weightOverrides: Map<Long, Double> = emptyMap(),
 )
 
 /** Продукт в приёме пищи. Граммы — как указал пользователь (крупы/макароны — в сухом виде). */
@@ -196,7 +206,7 @@ data class AppSettings(
     val updateRepo: String = "ricloned/ritm",
     val githubToken: String = "",
     val themeMode: String = "fixed",
-    val themeIndex: Int = 0,
+    val themeIndex: Int = 7,
 )
 
 // ---------- JSON ----------
@@ -247,6 +257,7 @@ internal object Codec {
 
     fun exerciseToJson(e: Exercise): JSONObject = JSONObject()
         .put("id", e.id).put("name", e.name).put("sets", e.sets).put("reps", e.reps).put("weight", e.weight)
+        .put("progressionReps", e.progressionReps).put("weightStep", e.weightStep)
 
     fun exerciseFromJson(o: JSONObject): Exercise = Exercise(
         id = o.getLong("id"),
@@ -254,16 +265,19 @@ internal object Codec {
         sets = o.optInt("sets", 3),
         reps = o.optInt("reps", 10),
         weight = o.optDouble("weight", 0.0),
+        progressionReps = o.optInt("progressionReps", 10),
+        weightStep = o.optDouble("weightStep", 0.0),
     )
 
     fun setToJson(s: SetEntry): JSONObject = JSONObject()
-        .put("reps", s.reps).put("weight", s.weight).put("done", s.done).put("comment", s.comment)
+        .put("reps", s.reps).put("weight", s.weight).put("done", s.done).put("comment", s.comment).put("round", s.round)
 
     fun setFromJson(o: JSONObject): SetEntry = SetEntry(
         reps = o.optString("reps"),
         weight = o.optString("weight"),
         done = o.optBoolean("done"),
         comment = o.optString("comment"),
+        round = o.optInt("round"),
     )
 
     fun logToJson(l: WorkoutLog): JSONObject = JSONObject()
@@ -272,11 +286,14 @@ internal object Codec {
         .put("report", l.report ?: JSONObject.NULL)
         .put("finishedAt", l.finishedAt)
         .put("dayNumber", l.dayNumber)
+        .put("programDay", l.programDay)
         .put("chat", l.chat.toJsonArray { JSONObject().put("role", it.role).put("text", it.text) })
         .put("exercises", l.exercises.toJsonArray { e ->
             JSONObject()
                 .put("name", e.name)
                 .put("targetSets", e.targetSets)
+                .put("plannedSets", e.plannedSets)
+                .put("exerciseId", e.exerciseId)
                 .put("targetReps", e.targetReps)
                 .put("targetWeight", e.targetWeight)
                 .put("sets", e.sets.toJsonArray(::setToJson))
@@ -288,6 +305,7 @@ internal object Codec {
         report = o.strOrNull("report"),
         finishedAt = o.optLong("finishedAt"),
         dayNumber = o.optInt("dayNumber", 0),
+        programDay = o.optInt("programDay"),
         chat = o.optJSONArray("chat").mapObjects { ChatMsg(it.optString("role"), it.optString("text")) },
         exercises = o.optJSONArray("exercises").mapObjects { e ->
             ExerciseLog(
@@ -296,6 +314,8 @@ internal object Codec {
                 targetReps = e.optInt("targetReps"),
                 targetWeight = e.optDouble("targetWeight", 0.0),
                 sets = e.optJSONArray("sets").mapObjects(::setFromJson),
+                plannedSets = e.optInt("plannedSets", e.optInt("targetSets")),
+                exerciseId = e.optLong("exerciseId"),
             )
         },
     )
@@ -523,7 +543,10 @@ internal object Codec {
     fun draftToJson(d: WorkoutDraft): JSONObject {
         val sets = JSONObject()
         d.sets.forEach { (id, list) -> sets.put(id.toString(), list.toJsonArray(::setToJson)) }
-        return JSONObject().put("date", d.date.toString()).put("sets", sets).put("roundDelta", d.roundDelta)
+        val weights = JSONObject()
+        d.weightOverrides.forEach { (id, weight) -> weights.put(id.toString(), weight) }
+        return JSONObject().put("date", d.date.toString()).put("sets", sets)
+            .put("roundDelta", d.roundDelta).put("weightOverrides", weights)
     }
 
     fun draftFromJson(o: JSONObject?): WorkoutDraft? {
@@ -535,7 +558,15 @@ internal object Codec {
                 val id = k.toLongOrNull() ?: return@forEach
                 map[id] = setsObj.optJSONArray(k).mapObjects(::setFromJson)
             }
-            WorkoutDraft(LocalDate.parse(o.getString("date")), map, o.optInt("roundDelta", 0))
+            val weights = mutableMapOf<Long, Double>()
+            o.optJSONObject("weightOverrides")?.let { stored ->
+                stored.keys().forEach { key ->
+                    val id = key.toLongOrNull()
+                    val weight = stored.optDouble(key)
+                    if (id != null && weight.isFinite() && weight > 0) weights[id] = weight
+                }
+            }
+            WorkoutDraft(LocalDate.parse(o.getString("date")), map, o.optInt("roundDelta", 0), weights)
         } catch (_: Exception) {
             null
         }
@@ -566,12 +597,15 @@ fun WorkoutLog.toText(withHeader: Boolean = true): String = buildString {
     val maxTarget = exercises.maxOfOrNull { it.targetSets } ?: 0
     val main = exercises.filter { !isFinisher(it.targetSets, maxTarget) }
     val finish = exercises.filter { isFinisher(it.targetSets, maxTarget) && it.sets.isNotEmpty() }
-    val rounds = main.maxOfOrNull { it.sets.size } ?: 0
+    val rounds = main.maxOfOrNull { it.lastRound() } ?: 0
     for (r in 0 until rounds) {
-        if (r > 0) appendLine()
-        appendLine("Круг ${r + 1}")
-        main.forEach { e ->
-            e.sets.getOrNull(r)?.let { appendLine("${e.name} ${it.lineText()}") }
+        val rows = main.mapNotNull { e ->
+            e.sets.indices.firstOrNull { e.setRound(it) == r + 1 }?.let { "${e.name} ${e.sets[it].lineText()}" }
+        }
+        if (rows.isNotEmpty()) {
+            if (r > 0) appendLine()
+            appendLine("Круг ${r + 1}")
+            rows.forEach { appendLine(it) }
         }
     }
     if (finish.isNotEmpty()) {
